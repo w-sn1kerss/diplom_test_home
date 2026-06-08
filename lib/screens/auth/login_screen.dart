@@ -335,7 +335,31 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
 
-                      // ... остальной код без изменений ...
+                      const SizedBox(height: 32),
+
+// Переход к регистрации
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Нет аккаунта?',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: _navigateToRegister, // Используем уже созданный вами метод
+                            child: Text(
+                              'Зарегистрироваться',
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),

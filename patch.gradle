@@ -1,0 +1,10 @@
+allprojects {
+    subprojects {
+        project.buildDir = "${rootProject.buildDir}/${project.name}"
+        project.evaluationDependsOn(':app')
+    }
+    
+    tasks.withType(com.android.build.gradle.tasks.factory.AndroidJavaCompile) {
+        options.compilerArgs << "-Xlint:-options"
+    }
+}

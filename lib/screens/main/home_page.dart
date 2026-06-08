@@ -3,9 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/book_service.dart';
 import '../../models/book_model.dart';
 import '../reader/book_reader_screen.dart';
-import '../users/book_comments_screen.dart';
 import '../users/blog_details_screen.dart';
-import 'main_screen.dart';
+import 'library_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -15,17 +14,20 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final BookService _bookService = BookService();
   final _supabase = Supabase.instance.client;
+  final BookService _bookService = BookService();
 
-  List<Book> _allBooks = [];
-  List<Book> _recommendedBooks = [];
-  List<Book> _recentlyReadBooks = [];
+  List<Book> _continueReading = [];
+  List<Book> _recommendations = [];
+  List<Book> _popularBooks = [];
   List<Map<String, dynamic>> _blogs = [];
   bool _isLoading = true;
 
-  // Сортировка блогов
-  String _currentSort = 'newest';
+  final Color _bgColor = const Color(0xFFF8F9FB);
+  final Color _onBgTextColor = const Color(0xFF1A1A1A);
+  final Color _inputBgColor = const Color(0xFFEDF0F4);
+  final Color _cardBgColor = const Color(0xFFE5E9EF);
+  final Color _accentColor = const Color(0xFFFF5722);
 
   @override
   void initState() {
@@ -34,934 +36,397 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadData() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
-    await Future.wait([
-      _loadBooks(),
-      _loadBlogs(),
-    ]);
-    if (mounted) {
-      setState(() => _isLoading = false);
-    }
-  }
 
-  Future<void> _loadBooks() async {
     try {
-      final books = await _bookService.getBooks();
-      if (mounted) {
-        setState(() {
-          _allBooks = books;
-          _recommendedBooks = books.length > 3
-              ? books.sublist(0, 3)
-              : books;
-          _recentlyReadBooks = books.length > 2
-              ? books.sublist(0, books.length > 3 ? 3 : books.length)
-              : books;
-        });
-      }
-    } catch (e) {
-      print('Ошибка загрузки книг: $e');
-      if (mounted) {
-        _setFallbackBooks();
-      }
-    }
-  }
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
 
-  Future<void> _loadBlogs() async {
-    try {
-      print('Загрузка блогов из Supabase...');
+      // 1. Загружаем скачанные книги ("Мои книги")
+      final downloadsRaw = await _supabase
+          .from('user_downloads')
+          .select('books(*)')
+          .eq('user_id', userId)
+          .order('downloaded_at', ascending: false)
+          .limit(5);
 
-      PostgrestTransformBuilder<PostgrestList> query = _supabase
+      final List<Book> loadedDownloads = [];
+      if (downloadsRaw != null) {
+        for (var item in (downloadsRaw as List)) {
+          final b = item['books'];
+          if (b != null) {
+            loadedDownloads.add(Book(
+              id: b['id'].toString(),
+              title: b['title'] ?? 'Без названия',
+              author: b['author'] ?? 'Неизвестен',
+              coverUrl: b['cover_url'] ?? '',
+              fileUrl: b['file_url'] ?? '',
+              description: b['description'] ?? '',
+              // Теперь это поле будет приходить из БД благодаря триггеру
+              rating: (b['rating'] ?? 0.0).toDouble(),
+              categories: List<String>.from(b['categories'] ?? []),
+              pages: (b['pages'] as num?)?.toInt() ?? 0,
+            ));
+          }
+        }
+      }
+
+      // 2. Получаем все книги (в BookService метод getBooks тоже должен читать rating)
+      final allBooks = await _bookService.getBooks();
+
+      // 3. Загружаем блоги
+      final blogsRaw = await _supabase
           .from('blogs')
-          .select('''
-      *,
-      profiles (
-        username,
-        avatar_url
-      )
-      ''');
-
-      // Применяем сортировку
-      switch (_currentSort) {
-        case 'newest':
-          query = query.order('created_at', ascending: false);
-          break;
-        case 'oldest':
-          query = query.order('created_at', ascending: true);
-          break;
-        case 'popular':
-          query = query.order('likes', ascending: false);
-          break;
-      }
-
-      final blogs = await query;
-
-      print('Загружено блогов: ${blogs.length}');
-      for (var blog in blogs) {
-        print('Блог: ${blog['title']}, автор: ${blog['profiles']?['username']}');
-      }
+          .select('*, profiles(username, avatar_url)')
+          .order('created_at', ascending: false)
+          .limit(5);
 
       if (mounted) {
         setState(() {
-          _blogs = List<Map<String, dynamic>>.from(blogs);
+          _continueReading = loadedDownloads;
+
+          // ЛОГИКА РЕКОМЕНДАЦИЙ (Сортировка по рейтингу)
+          if (_continueReading.isNotEmpty) {
+            final myCats = _continueReading.expand((b) => b.categories).toSet();
+            _recommendations = allBooks
+                .where((b) => b.categories.any((c) => myCats.contains(c)))
+                .where((b) => !_continueReading.any((cr) => cr.id == b.id))
+                .toList();
+          } else {
+            _recommendations = List.from(allBooks);
+          }
+          // Сортируем: сначала самые высокие оценки
+          _recommendations.sort((a, b) => (b.rating ?? 0).compareTo(a.rating ?? 0));
+          _recommendations = _recommendations.take(6).toList();
+
+          // --- САМОЕ ПОПУЛЯРНОЕ: ТРИ КНИГИ С ЛУЧШИМ РЕЙТИНГОМ ---
+          _popularBooks = List<Book>.from(allBooks);
+          _popularBooks.sort((a, b) => (b.rating ?? 0).compareTo(a.rating ?? 0));
+          _popularBooks = _popularBooks.take(3).toList();
+
+          _blogs = List<Map<String, dynamic>>.from(blogsRaw as List);
+          _isLoading = false;
         });
       }
     } catch (e) {
-      print('Ошибка загрузки блогов: $e');
-      print('Стек трейс: ${e.toString()}');
-      if (mounted) {
-        _setFallbackBlogs();
-      }
+      debugPrint('Ошибка загрузки: $e');
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _setFallbackBooks() {
-    setState(() {
-      _allBooks = [
-        Book(
-          id: '7e69c3fd-73c9-4282-9b3d-308c35fe0c9f',
-          title: 'Маленький принц',
-          author: 'Антуан де Сент-Экзюпери',
-          coverUrl: 'https://covers.openlibrary.org/b/id/10410081-L.jpg',
-          fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-          description: 'Философская сказка о дружбе и ответственности',
-          pages: 96,
-          category: 'Детская литература',
-        ),
-        Book(
-          id: '550e8400-e29b-41d4-a716-446655440000',
-          title: 'Война и мир',
-          author: 'Лев Толстой',
-          coverUrl: 'https://covers.openlibrary.org/b/id/7974501-L.jpg',
-          fileUrl: '',
-          description: 'Роман-эпопея',
-          pages: 1225,
-          category: 'Классика',
-        ),
-        Book(
-          id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
-          title: 'Преступление и наказание',
-          author: 'Фёдор Достоевский',
-          coverUrl: 'https://covers.openlibrary.org/b/id/10410081-L.jpg',
-          fileUrl: '',
-          description: 'Психологический роман',
-          pages: 430,
-          category: 'Классика',
-        ),
-      ];
-      _recommendedBooks = _allBooks.length > 3
-          ? _allBooks.sublist(0, 3)
-          : _allBooks;
-      _recentlyReadBooks = _allBooks.length > 2
-          ? _allBooks.sublist(0, _allBooks.length > 3 ? 3 : _allBooks.length)
-          : _allBooks;
-    });
-  }
-
-  void _setFallbackBlogs() {
-    setState(() {
-      _blogs = [
-        {
-          'id': '1',
-          'title': 'Как читать больше книг?',
-          'content': '5 простых привычек, которые помогут вам читать по книге в неделю...',
-          'likes': 124,
-          'comments': 34,
-          'created_at': DateTime.now().subtract(const Duration(hours: 2)).toIso8601String(),
-          'profiles': {
-            'username': 'Анна Иванова',
-            'avatar_url': '👩'
-          }
-        },
-        {
-          'id': '2',
-          'title': 'Лучшие книги 2024 года',
-          'content': 'Подборка самых интересных новинок в жанре фантастики...',
-          'likes': 89,
-          'comments': 23,
-          'created_at': DateTime.now().subtract(const Duration(days: 1)).toIso8601String(),
-          'profiles': {
-            'username': 'Дмитрий Петров',
-            'avatar_url': '👨'
-          }
-        },
-      ];
-    });
+  void _openBook(Book book) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => BookReaderScreen(book: book)));
+    _loadData();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: const Text('Главная'),
-        centerTitle: true,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
-            tooltip: 'Обновить',
-          ),
-        ],
-      ),
+      backgroundColor: _bgColor,
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
-          : RefreshIndicator(
-        onRefresh: _loadData,
-        color: const Color(0xFF6C63FF),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Рекомендуемые книги
-              _buildSectionHeader(
-                title: 'Рекомендуем для вас',
-                icon: Icons.star,
-                onSeeAll: () {
-                  final mainScreen = context.findAncestorStateOfType<MainScreenState>();
-                  mainScreen?.changeTab(1);
-                },
-              ),
-              const SizedBox(height: 16),
-              _buildRecommendedBooks(),
-              const SizedBox(height: 32),
-
-              // Недавно прочитанные
-              _buildSectionHeader(
-                title: 'Недавно прочитанные',
-                icon: Icons.history,
-                onSeeAll: () {
-                  final mainScreen = context.findAncestorStateOfType<MainScreenState>();
-                  mainScreen?.changeTab(1);
-                },
-              ),
-              const SizedBox(height: 16),
-              _buildRecentBooks(),
-              const SizedBox(height: 32),
-
-              // Блоги читателей с сортировкой
-              _buildBlogsHeader(),
-              const SizedBox(height: 16),
-              _buildBlogsList(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRecommendedBooks() {
-    if (_recommendedBooks.isEmpty) {
-      return _buildEmptyState('Нет рекомендаций');
-    }
-
-    return SizedBox(
-      height: 260,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: _recommendedBooks.length > 5 ? 5 : _recommendedBooks.length,
-        itemBuilder: (context, index) {
-          final book = _recommendedBooks[index];
-          return Container(
-            width: 160,
-            margin: const EdgeInsets.only(right: 16),
-            child: RecommendedBookCard(book: book),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildRecentBooks() {
-    if (_recentlyReadBooks.isEmpty) {
-      return _buildEmptyState('Нет недавно прочитанных');
-    }
-
-    return SizedBox(
-      height: 120,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: _recentlyReadBooks.length > 5 ? 5 : _recentlyReadBooks.length,
-        itemBuilder: (context, index) {
-          final book = _recentlyReadBooks[index];
-          return Container(
-            width: 280,
-            margin: const EdgeInsets.only(right: 16),
-            child: RecentBookCard(book: book),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildBlogsHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF6C63FF).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.article,
-                size: 16,
-                color: Color(0xFF6C63FF),
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Text(
-              'Блоги читателей',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-          ],
-        ),
-        PopupMenuButton<String>(
-          icon: Row(
-            children: [
-              Text(
-                _getSortLabel(),
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
+          ? Center(child: CircularProgressIndicator(color: _accentColor, strokeWidth: 2))
+          : SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _loadData,
+          color: _accentColor,
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildHeader(),
+                const SizedBox(height: 16),
+                _buildContinueReadingList(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 35),
+                      _buildSectionHeader('Рекомендации', 'Библиотека',
+                          onAction: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LibraryPage()))),
+                      const SizedBox(height: 16),
+                      _buildHorizontalGrid(),
+                      const SizedBox(height: 35),
+                      _buildSectionHeader('Самое популярное', ''),
+                      const SizedBox(height: 16),
+                      _buildPopularVerticalList(),
+                      const SizedBox(height: 35),
+                      _buildSectionHeader('Блоги сообщества', ''),
+                      const SizedBox(height: 16),
+                      _buildBlogsList(),
+                      const SizedBox(height: 40),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              Icon(
-                Icons.sort,
-                size: 18,
-                color: Colors.grey[600],
-              ),
-            ],
+              ],
+            ),
           ),
-          onSelected: (String value) {
-            setState(() {
-              _currentSort = value;
-            });
-            _loadBlogs();
-          },
-          itemBuilder: (BuildContext context) => [
-            const PopupMenuItem<String>(
-              value: 'newest',
-              child: Row(
-                children: [
-                  Icon(Icons.access_time, size: 18, color: Color(0xFF6C63FF)),
-                  SizedBox(width: 8),
-                  Text('Сначала новые'),
-                ],
-              ),
-            ),
-            const PopupMenuItem<String>(
-              value: 'oldest',
-              child: Row(
-                children: [
-                  Icon(Icons.access_time, size: 18, color: Color(0xFF6C63FF)),
-                  SizedBox(width: 8),
-                  Text('Сначала старые'),
-                ],
-              ),
-            ),
-            const PopupMenuItem<String>(
-              value: 'popular',
-              child: Row(
-                children: [
-                  Icon(Icons.favorite, size: 18, color: Color(0xFF6C63FF)),
-                  SizedBox(width: 8),
-                  Text('По популярности'),
-                ],
-              ),
-            ),
-          ],
         ),
-      ],
-    );
-  }
-
-  String _getSortLabel() {
-    switch (_currentSort) {
-      case 'newest':
-        return 'Сначала новые';
-      case 'oldest':
-        return 'Сначала старые';
-      case 'popular':
-        return 'По популярности';
-      default:
-        return 'Сортировка';
-    }
-  }
-
-  Widget _buildBlogsList() {
-    if (_blogs.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.03),
-              blurRadius: 10,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            Icon(
-              Icons.article_outlined,
-              size: 48,
-              color: Colors.grey[400],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Пока нет блогов',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Станьте первым, кто напишет блог!',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[500],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return SizedBox(
-      height: 260,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: _blogs.length > 5 ? 5 : _blogs.length,
-        itemBuilder: (context, index) {
-          final blog = _blogs[index];
-          return Container(
-            width: 300,
-            margin: const EdgeInsets.only(right: 16),
-            child: BlogCard(blog: blog),
-          );
-        },
       ),
     );
   }
 
-  Widget _buildSectionHeader({
-    required String title,
-    required IconData icon,
-    required VoidCallback onSeeAll,
-  }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF6C63FF).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                icon,
-                size: 16,
-                color: const Color(0xFF6C63FF),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-          ],
-        ),
-        TextButton(
-          onPressed: onSeeAll,
-          child: const Text(
-            'Все →',
-            style: TextStyle(
-              color: Color(0xFF6C63FF),
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildEmptyState(String message) {
-    return Center(
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.info_outline,
-            size: 40,
-            color: Colors.grey[400],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[500],
-            ),
-          ),
+          const SizedBox(height: 20),
+          Text('Найди книгу', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: _onBgTextColor)),
+          const SizedBox(height: 20),
+          _buildSearchField(),
+          if (_continueReading.isNotEmpty) ...[
+            const SizedBox(height: 30),
+            _buildSectionHeader('Продолжить чтение', ''),
+          ],
         ],
       ),
     );
   }
-}
 
-// Карточка для рекомендуемых книг
-class RecommendedBookCard extends StatelessWidget {
-  final Book book;
-
-  const RecommendedBookCard({super.key, required this.book});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => BookReaderScreen(book: book),
-          ),
-        );
-      },
-      child: Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              flex: 3,
-              child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(16),
-                ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image.network(
-                      book.coverUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          color: Colors.grey[200],
-                          child: const Center(
-                            child: Icon(Icons.book, size: 40, color: Colors.grey),
-                          ),
-                        );
-                      },
-                    ),
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.amber,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Icon(
-                              Icons.star,
-                              size: 12,
-                              color: Colors.white,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              '4.8',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      book.title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      book.author,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => BookCommentsScreen(
-                              bookId: book.id,
-                              bookTitle: book.title,
-                            ),
-                          ),
-                        );
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF6C63FF).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Icon(
-                              Icons.chat_bubble_outline,
-                              size: 12,
-                              color: Color(0xFF6C63FF),
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              'Обсудить',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF6C63FF),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
+  Widget _buildSearchField() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      height: 50,
+      decoration: BoxDecoration(color: _inputBgColor, borderRadius: BorderRadius.circular(14)),
+      child: const Row(
+        children: [
+          Icon(Icons.search_rounded, color: Colors.black45, size: 22),
+          SizedBox(width: 12),
+          Text('Поиск книг...', style: TextStyle(color: Colors.black38, fontSize: 15, fontWeight: FontWeight.w500)),
+        ],
       ),
     );
   }
-}
 
-// Карточка для недавно прочитанных книг
-class RecentBookCard extends StatelessWidget {
-  final Book book;
-
-  const RecentBookCard({super.key, required this.book});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => BookReaderScreen(book: book),
+  Widget _buildSectionHeader(String title, String action, {VoidCallback? onAction}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _onBgTextColor)),
+        if (action.isNotEmpty)
+          GestureDetector(
+            onTap: onAction,
+            child: Text(action, style: TextStyle(color: _accentColor, fontWeight: FontWeight.w700, fontSize: 13)),
           ),
-        );
-      },
-      child: Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(12),
-              ),
-              child: Image.network(
-                book.coverUrl,
-                width: 80,
-                height: 120,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    width: 80,
-                    height: 120,
-                    color: Colors.grey[200],
-                    child: const Center(
-                      child: Icon(Icons.book, size: 30, color: Colors.grey),
-                    ),
-                  );
-                },
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      book.title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      book.author,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Text(
-                        'Продолжить →',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.green,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+      ],
     );
   }
-}
 
-// Карточка блога из Supabase
-class BlogCard extends StatelessWidget {
-  final Map<String, dynamic> blog;
+  Widget _buildCover(String? url, {double width = 115, double height = 160}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: (url != null && url.isNotEmpty)
+          ? Image.network(
+        url,
+        width: width,
+        height: height,
+        fit: BoxFit.cover,
+        // Добавляем кэширование или лоадер, чтобы не моргало
+        loadingBuilder: (context, child, progress) => progress == null
+            ? child
+            : Container(width: width, height: height, color: _cardBgColor, child: const Center(child: CircularProgressIndicator(strokeWidth: 1))),
+        errorBuilder: (context, error, stackTrace) => _buildPlaceholder(width, height),
+      )
+          : _buildPlaceholder(width, height),
+    );
+  }
 
-  const BlogCard({super.key, required this.blog});
+  Widget _buildPlaceholder(double width, double height) {
+    return Container(
+      width: width,
+      height: height,
+      color: _cardBgColor,
+      child: const Icon(Icons.book, color: Colors.black26),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final profile = blog['profiles'] as Map<String, dynamic>?;
-    final userName = profile?['username'] ?? 'Пользователь';
-    final userAvatar = profile?['avatar_url'] ?? '👤';
-    final createdAt = DateTime.parse(blog['created_at']);
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: // В классе BlogCard, в InkWell:
-      InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => BlogDetailScreen(
-                  blog: blog,
-                  profile: profile,
-                ),
-              ),
-            );
-          },
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+  Widget _buildContinueReadingList() {
+    if (_continueReading.isEmpty) return const SizedBox();
+    return SizedBox(
+      height: 110,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _continueReading.length,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        itemBuilder: (context, i) {
+          final book = _continueReading[i];
+          return GestureDetector(
+            onTap: () => _openBook(book),
+            child: Container(
+              width: 260,
+              margin: const EdgeInsets.only(right: 16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: _cardBgColor, borderRadius: BorderRadius.circular(18)),
+              child: Row(
                 children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6C63FF).withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        userAvatar,
-                        style: const TextStyle(fontSize: 20),
-                      ),
-                    ),
-                  ),
+                  _buildCover(book.coverUrl, width: 60, height: 86),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          userName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _formatTimeAgo(createdAt),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[500],
-                          ),
-                        ),
+                        Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                        Text(book.author, maxLines: 1, style: TextStyle(color: _onBgTextColor.withOpacity(0.5), fontSize: 12)),
                       ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text(
-                      'Блог',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.blue,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
                 ],
               ),
-              const SizedBox(height: 12),
-              Text(
-                blog['title'] ?? 'Без названия',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                blog['content'] ?? '',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                  height: 1.4,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const Spacer(),
-              Row(
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHorizontalGrid() {
+    return SizedBox(
+      height: 220,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _recommendations.length,
+        itemBuilder: (context, i) {
+          final book = _recommendations[i];
+          return GestureDetector(
+            onTap: () => _openBook(book),
+            child: Container(
+              width: 115,
+              margin: const EdgeInsets.only(right: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.favorite_border,
-                    size: 16,
-                    color: Colors.grey[400],
+                  Stack(
+                    children: [
+                      _buildCover(book.coverUrl),
+                      Positioned(top: 8, left: 8, child: _buildRatingBadge(book.rating)),
+                    ],
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${blog['likes'] ?? 0}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[500],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Icon(
-                    Icons.chat_bubble_outline,
-                    size: 16,
-                    color: Colors.grey[400],
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${blog['comments'] ?? 0}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[500],
-                    ),
-                  ),
+                  const SizedBox(height: 8),
+                  Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  Text(book.author, maxLines: 1, style: const TextStyle(color: Colors.black45, fontSize: 11)),
                 ],
               ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildPopularVerticalList() {
+    return Column(
+      children: _popularBooks.asMap().entries.map((entry) {
+        return _buildListTileCard(
+          index: entry.key + 1,
+          title: entry.value.title,
+          subtitle: entry.value.author,
+          image: entry.value.coverUrl,
+          rating: entry.value.rating,
+          showRating: true,
+          onTap: () => _openBook(entry.value),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildBlogsList() {
+    return Column(
+      children: _blogs.map((blog) {
+        final profile = blog['profiles'] as Map<String, dynamic>?;
+        return _buildListTileCard(
+          index: _blogs.indexOf(blog) + 1,
+          title: blog['title'] ?? 'Без названия',
+          subtitle: profile?['username'] ?? 'Автор',
+          image: blog['image_url'],
+          rating: 0,
+          showRating: false, // УБРАЛИ ОЦЕНКИ
+          onTap: () {
+            Navigator.push(context, MaterialPageRoute(builder: (context) => BlogDetailScreen(
+              blog: blog,
+              userData: profile,
+              isOwnProfile: blog['user_id'] == _supabase.auth.currentUser?.id,
+              onUpdate: _loadData,
+            )));
+          },
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildListTileCard({required int index, required String title, required String subtitle, String? image, required double rating, required bool showRating, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10)],
+            border: Border.all(color: Colors.black.withOpacity(0.03))
+        ),
+        child: Row(
+          children: [
+            Text('$index', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: _onBgTextColor.withOpacity(0.15))),
+            const SizedBox(width: 16),
+            if (image != null) ...[
+              _buildCover(image, width: 45, height: 60),
+              const SizedBox(width: 16),
             ],
-          ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                  Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 12)),
+                ],
+              ),
+            ),
+            if (showRating) _buildMiniRating(rating),
+          ],
         ),
       ),
     );
   }
 
-  String _formatTimeAgo(DateTime date) {
-    final now = DateTime.now();
-    final difference = now.difference(date);
+  Widget _buildRatingBadge(double rating) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4)]
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.star_rounded, color: _accentColor, size: 12),
+          const SizedBox(width: 2),
+          // Если 0.0 — значит отзывов еще нет, но показываем цифру
+          Text(
+              rating.toStringAsFixed(1),
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)
+          ),
+        ],
+      ),
+    );
+  }
 
-    if (difference.inSeconds < 60) return 'Только что';
-    if (difference.inMinutes < 60) return '${difference.inMinutes} мин назад';
-    if (difference.inHours < 24) return '${difference.inHours} ч назад';
-    if (difference.inDays < 7) return '${difference.inDays} д назад';
-    if (difference.inDays < 30) return '${difference.inDays ~/ 7} нед назад';
-    if (difference.inDays < 365) return '${difference.inDays ~/ 30} мес назад';
-    return '${difference.inDays ~/ 365} г назад';
+  Widget _buildMiniRating(double rating) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.star_rounded, color: _accentColor, size: 16),
+        const SizedBox(width: 4),
+        Text(
+            rating.toStringAsFixed(1),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)
+        ),
+      ],
+    );
   }
 }

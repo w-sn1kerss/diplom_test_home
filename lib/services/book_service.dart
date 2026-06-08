@@ -6,68 +6,74 @@ class BookService {
 
   Future<List<Book>> getBooks() async {
     try {
-      print('Загрузка книг из Supabase...');
-
+      // Запрашиваем все данные, сортируем по дате добавления (новые сверху)
       final response = await _supabase
           .from('books')
           .select('*')
           .order('created_at', ascending: false);
 
-      print('Получено книг: ${response.length}');
+      final List<dynamic> data = response as List<dynamic>;
 
-      final books = (response as List).map((json) {
-        print('Книга: ${json['title']}, ID: ${json['id']}');
+      return data.map((json) {
+        // 1. Обработка обложки (если пусто — ставим заглушку)
+        final String rawCoverUrl = json['cover_url'] ?? '';
+        final String coverUrl = rawCoverUrl.isNotEmpty
+            ? rawCoverUrl
+            : 'https://images.unsplash.com/photo-1543005139-85e92111bb46?q=80&w=500&auto=format&fit=crop';
 
-        // ВАЖНО: В вашем JSON файл хранится в cover_url, а не в file_url
-        String fileUrl = json['cover_url'] ?? '';  // Используем cover_url как fileUrl
+        // 2. Безопасное приведение рейтинга (важно для работы со звездами)
+        // Если в БД NULL или int, принудительно делаем double
+        final double rating = (json['rating'] ?? 0.0).toDouble();
 
-        // Если нужно, можно добавить логику для определения формата
-        String fileExtension = '';
-        if (fileUrl.isNotEmpty) {
-          fileExtension = fileUrl.split('.').last.toLowerCase();
-        }
+        // 3. Безопасное приведение страниц
+        final int pages = json['pages'] != null ? (json['pages'] as num).toInt() : 0;
+
+        // 4. Обработка категорий (массив строк)
+        final List<String> categories = json['categories'] != null
+            ? List<String>.from(json['categories'])
+            : ['Без категории'];
 
         return Book(
           id: json['id'].toString(),
           title: json['title'] ?? 'Без названия',
           author: json['author'] ?? 'Неизвестный автор',
-          coverUrl: json['cover_url'] ?? 'https://via.placeholder.com/150',  // Для обложки
-          fileUrl: fileUrl,  // Используем ту же ссылку для файла
+          coverUrl: coverUrl,
+          fileUrl: json['file_url'] ?? '',
           description: json['description'] ?? '',
-          pages: (json['pages'] as num?)?.toInt() ?? 0,
-          category: json['category'] ?? 'Без категории',
+          rating: rating,
+          pages: pages,
+          categories: categories,
         );
       }).toList();
 
-      print('Успешно загружено книг: ${books.length}');
-      return books;
     } catch (e) {
-      print('Ошибка загрузки книг: $e');
-      print('Стек трейс: ${e.toString()}');
+      // Логируем ошибку, чтобы понимать, что пошло не так
+      print('--- Ошибка загрузки книг в BookService ---');
+      print(e);
+      // Возвращаем пустой список, чтобы приложение не "крашнулось"
+      return [];
+    }
+  }
 
-      // Возвращаем тестовые книги для демонстрации
-      return [
-        Book(
-          id: '7e69c3fd-73c9-4282-9b3d-308c35fe0c9f',
-          title: 'Маленький принц',
-          author: 'Антуан де Сент-Экзюпери',
-          coverUrl: 'https://covers.openlibrary.org/b/id/10410081-L.jpg',
-          fileUrl: 'https://fiyfttuzxnokdgiqtpua.supabase.co/storage/v1/object/public/books/malenkiy%20prince.pdf',
-          description: 'Философская сказка о дружбе, любви и ответственности',
-          pages: 96,
-          category: 'Детская литература',
-        ),
-        Book(
-          id: '9b896e7f-baa4-4ff2-8546-8e07b8b28745',
-          title: 'Посторонний',
-          author: 'Альбер Камю',
-          coverUrl: 'https://fiyfttuzxnokdgiqtpua.supabase.co/storage/v1/object/public/books/postoronniy.epub',
-          fileUrl: 'https://fiyfttuzxnokdgiqtpua.supabase.co/storage/v1/object/public/books/postoronniy.epub',
-          description: 'lallalalaal',
-          pages: 0,
-          category: 'Без категории',
-        ),
-      ];
+  /// Дополнительный метод, если нужно получить только одну книгу по ID
+  Future<Book?> getBookById(String id) async {
+    try {
+      final data = await _supabase.from('books').select().eq('id', id).single();
+
+      return Book(
+        id: data['id'].toString(),
+        title: data['title'] ?? '',
+        author: data['author'] ?? '',
+        coverUrl: data['cover_url'] ?? '',
+        fileUrl: data['file_url'] ?? '',
+        description: data['description'] ?? '',
+        rating: (data['rating'] ?? 0.0).toDouble(),
+        pages: (data['pages'] as num?)?.toInt() ?? 0,
+        categories: List<String>.from(data['categories'] ?? []),
+      );
+    } catch (e) {
+      print('Ошибка получения книги $id: $e');
+      return null;
     }
   }
 }

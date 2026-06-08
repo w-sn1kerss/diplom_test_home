@@ -1,6 +1,8 @@
+import 'dart:convert';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/gigachat_service.dart';
 
 class NeuroPage extends StatefulWidget {
@@ -12,62 +14,58 @@ class NeuroPage extends StatefulWidget {
 
 class _NeuroPageState extends State<NeuroPage> {
   final TextEditingController _messageController = TextEditingController();
-  final List<Map<String, dynamic>> _messages = [];
   final ScrollController _scrollController = ScrollController();
-
+  List<Map<String, dynamic>> _messages = [];
   bool _isLoading = false;
   bool _isInitialized = false;
-
   late GigaChatService _gigaChatService;
-
-  // Предустановленные вопросы
-  final List<String> _suggestedQuestions = [
-    'Посоветуй книгу для начинающих',
-    'Что почитать из классики?',
-    'Какие книги по саморазвитию?',
-    'Расскажи о Маленьком принце',
-    'Что такое "Война и мир"?',
-  ];
 
   @override
   void initState() {
     super.initState();
-    _initializeGigaChat();
+    _setupService();
+    _loadChatHistory();
   }
 
-  Future<void> _initializeGigaChat() async {
-    try {
-      // Получите эти данные в GigaChat Dashboard
-      _gigaChatService = GigaChatService(
-        clientId: dotenv.env['GIGACHAT_CLIENT_ID']!,
-        clientSecret: dotenv.env['GIGACHAT_CLIENT_SECRET']!,
-      );
+  void _setupService() {
+    _gigaChatService = GigaChatService(
+      clientId: dotenv.env['GIGACHAT_CLIENT_ID']!,
+      clientSecret: dotenv.env['GIGACHAT_CLIENT_SECRET']!,
+    );
+    setState(() => _isInitialized = true);
+  }
 
+  Future<void> _loadChatHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? savedChat = prefs.getString('chat_history');
+    if (savedChat != null) {
       setState(() {
-        _isInitialized = true;
+        _messages = List<Map<String, dynamic>>.from(json.decode(savedChat));
       });
-
-      // Добавляем приветственное сообщение
-      _messages.add({
-        'text': 'Здравствуйте! Я книжный ассистент на базе GigaChat. '
-            'Могу помочь с выбором книг, рассказать о произведениях и авторах. '
-            'О чем бы вы хотели спросить?',
-        'isUser': false,
-        'timestamp': DateTime.now(),
-      });
-    } catch (e) {
-      print('Ошибка инициализации GigaChat: $e');
+      _scrollToBottom();
+    } else {
       setState(() {
-        _isInitialized = true; // Все равно показываем интерфейс, но с ошибкой
-      });
-      _messages.add({
-        'text': 'Извините, возникла проблема с подключением к GigaChat. '
-            'Пожалуйста, проверьте настройки или попробуйте позже.',
-        'isUser': false,
-        'isError': true,
-        'timestamp': DateTime.now(),
+        _messages.add({
+          'text': 'Рад твоему визиту в мою обитель. О какой книге ты хочешь поговорить сегодня?',
+          'isUser': false,
+        });
       });
     }
+  }
+
+  Future<void> _saveChatHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('chat_history', json.encode(_messages));
+  }
+
+  Future<void> _clearChat() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('chat_history');
+    setState(() {
+      _messages = [
+        {'text': 'Полки снова чисты. Начнем новый рассказ?', 'isUser': false}
+      ];
+    });
   }
 
   void _scrollToBottom() {
@@ -82,445 +80,162 @@ class _NeuroPageState extends State<NeuroPage> {
     });
   }
 
-  Future<void> _sendMessage({String? suggestedText}) async {
-    String messageText = suggestedText ?? _messageController.text;
-
-    if (messageText.trim().isEmpty) return;
-
-    if (!_isInitialized) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Инициализация GigaChat... Подождите'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
+  Future<void> _sendMessage() async {
+    String messageText = _messageController.text;
+    if (messageText.trim().isEmpty || !_isInitialized) return;
 
     setState(() {
-      if (suggestedText == null) {
-        _messageController.clear();
-      }
-
-      _messages.add({
-        'text': messageText,
-        'isUser': true,
-        'timestamp': DateTime.now(),
-      });
+      _messageController.clear();
+      _messages.add({'text': messageText, 'isUser': true});
       _isLoading = true;
     });
-
     _scrollToBottom();
+    await _saveChatHistory();
 
     try {
-      // Получаем ответ от GigaChat
-      final response = await _gigaChatService.sendMessage(messageText);
-
+      final response = await _gigaChatService.sendBookQuery(messageText);
       setState(() {
-        _messages.add({
-          'text': response,
-          'isUser': false,
-          'timestamp': DateTime.now(),
-        });
+        _messages.add({'text': response, 'isUser': false});
       });
     } catch (e) {
       setState(() {
         _messages.add({
-          'text': 'Извините, произошла ошибка при обработке запроса. Пожалуйста, попробуйте еще раз.',
-          'isUser': false,
-          'isError': true,
-          'timestamp': DateTime.now(),
+          'text': 'Тишина библиотечных залов прервана ошибкой... Попробуй еще раз.',
+          'isUser': false
         });
       });
-      print('Ошибка отправки сообщения: $e');
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
       _scrollToBottom();
+      await _saveChatHistory();
     }
-  }
-
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: const Text('Нейропомощник'),
-        centerTitle: true,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : () => _initializeGigaChat(),
-            tooltip: 'Перезапустить',
+      extendBody: true, // Важно для прозрачной навигации
+      body: Stack(
+        children: [
+          // 1. ФОН
+          Positioned.fill(
+            child: Image.network(
+              'https://i.pinimg.com/originals/60/d8/44/60d844679e07db517c19fdc5dd7af089.gif',
+              fit: BoxFit.cover,
+            ),
+          ),
+
+          // 2. ЗАТЕМНЕНИЕ
+          Positioned.fill(
+            child: Container(color: Colors.black.withOpacity(0.4)),
+          ),
+
+          // 3. КОНТЕНТ
+          SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.topRight,
+                  child: IconButton(
+                    icon: const Icon(Icons.delete_sweep_outlined, color: Colors.white38),
+                    onPressed: _clearChat,
+                  ),
+                ),
+
+                Expanded(
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[index];
+                      return _buildGlassBubble(msg['text'], msg['isUser'] ?? false);
+                    },
+                  ),
+                ),
+
+                if (_isLoading)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 10),
+                    child: Text('Хранитель ищет ответ на полках...',
+                        style: TextStyle(color: Colors.white60, fontSize: 12, fontStyle: FontStyle.italic)),
+                  ),
+
+                // ВЕРНУЛ КРУТУЮ НИЖНЮЮ ЧАСТЬ
+                _buildBlurInput(),
+              ],
+            ),
           ),
         ],
       ),
-      body: Column(
+    );
+  }
+
+  // Тот самый стеклянный баббл
+  Widget _buildGlassBubble(String text, bool isUser) {
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: isUser ? Colors.white.withOpacity(0.15) : Colors.black.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(20).copyWith(
+            bottomRight: isUser ? const Radius.circular(2) : const Radius.circular(20),
+            bottomLeft: isUser ? const Radius.circular(20) : const Radius.circular(2),
+          ),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4),
+        ),
+      ),
+    );
+  }
+
+  // ТА САМАЯ КРУТАЯ НИЖНЯЯ ПАНЕЛЬ
+  Widget _buildBlurInput() {
+    return Container(
+      // Тот самый свободный отступ из первой версии
+      padding: EdgeInsets.fromLTRB(20, 0, 10, MediaQuery.of(context).padding.bottom + 20),
+      child: Row(
         children: [
-          // Заголовок
-          Container(
-            padding: const EdgeInsets.all(20),
-            margin: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF6C63FF), Color(0xFF8B7FFF)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.psychology,
-                    size: 32,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'GigaChat Ассистент',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Задайте вопрос о книгах',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.white.withOpacity(0.9),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Предустановленные вопросы
-          if (_messages.length <= 2)
-            Container(
-              height: 50,
-              margin: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _suggestedQuestions.length,
-                itemBuilder: (context, index) {
-                  return GestureDetector(
-                    onTap: _isLoading ? null : () => _sendMessage(suggestedText: _suggestedQuestions[index]),
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: const Color(0xFF6C63FF).withOpacity(0.3),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
-                            blurRadius: 4,
-                          ),
-                        ],
-                      ),
-                      child: Center(
-                        child: Text(
-                          _suggestedQuestions[index],
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF6C63FF),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-
-          // Список сообщений
+          // Поле ввода без границ и плашек, как в самом начале
           Expanded(
-            child: _messages.isEmpty
-                ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.chat_bubble_outline,
-                    size: 64,
-                    color: Colors.grey,
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    'Начните диалог',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Спросите о любой книге',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey,
-                    ),
-                  ),
-                ],
+            child: TextField(
+              controller: _messageController,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              maxLines: null,
+              decoration: const InputDecoration(
+                hintText: 'Напиши...',
+                hintStyle: TextStyle(color: Colors.white38),
+                border: InputBorder.none, // Полное отсутствие рамок
+                focusedBorder: InputBorder.none,
+                enabledBorder: InputBorder.none,
               ),
-            )
-                : ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                final isUser = message['isUser'] ?? false;
-                final isError = message['isError'] ?? false;
-                final time = message['timestamp'] as DateTime? ?? DateTime.now();
-
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 16),
-                  child: Row(
-                    mainAxisAlignment: isUser
-                        ? MainAxisAlignment.end
-                        : MainAxisAlignment.start,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (!isUser) ...[
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF6C63FF), Color(0xFF8B7FFF)],
-                            ),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.auto_awesome,
-                              size: 18,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Flexible(
-                        child: Column(
-                          crossAxisAlignment: isUser
-                              ? CrossAxisAlignment.end
-                              : CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: isUser
-                                    ? const Color(0xFF6C63FF)
-                                    : (isError ? Colors.red[50] : Colors.white),
-                                borderRadius: BorderRadius.circular(16).copyWith(
-                                  bottomLeft: isUser
-                                      ? const Radius.circular(16)
-                                      : const Radius.circular(4),
-                                  bottomRight: isUser
-                                      ? const Radius.circular(4)
-                                      : const Radius.circular(16),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.05),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Text(
-                                message['text'] ?? '',
-                                style: TextStyle(
-                                  color: isUser
-                                      ? Colors.white
-                                      : (isError ? Colors.red[700] : Colors.black87),
-                                  fontSize: 14,
-                                  height: 1.4,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 8),
-                              child: Text(
-                                _formatTime(time),
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.grey[400],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (isUser) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.person,
-                              size: 20,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                );
-              },
+              onSubmitted: (_) => _sendMessage(),
             ),
           ),
 
-          // Индикатор загрузки
-          if (_isLoading)
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF6C63FF),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6C63FF).withOpacity(0.7),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6C63FF).withOpacity(0.4),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Text(
-                    'GigaChat думает...',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey,
-                    ),
-                  ),
-                ],
-              ),
+          // Кнопка-иконка без лишних подложек (максимальный минимализм)
+          _isLoading
+              ? const Padding(
+            padding: EdgeInsets.all(12.0),
+            child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70)
             ),
-
-          // Поле ввода
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, -5),
-                ),
-              ],
+          )
+              : IconButton(
+            icon: const Icon(
+                Icons.auto_awesome, // Твой новый «магический» значок
+                color: Colors.white,
+                size: 26
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
-                        color: _messageController.text.isNotEmpty
-                            ? const Color(0xFF6C63FF).withOpacity(0.3)
-                            : Colors.transparent,
-                      ),
-                    ),
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: InputDecoration(
-                        hintText: 'Напишите сообщение...',
-                        border: InputBorder.none,
-                        hintStyle: TextStyle(color: Colors.grey[400]),
-                        suffixIcon: _messageController.text.isNotEmpty
-                            ? IconButton(
-                          icon: const Icon(Icons.clear, size: 18),
-                          onPressed: () => setState(() => _messageController.clear()),
-                        )
-                            : null,
-                      ),
-                      maxLines: null,
-                      onSubmitted: (_) => _sendMessage(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF6C63FF), Color(0xFF8B7FFF)],
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    onPressed: _isLoading ? null : () => _sendMessage(),
-                    icon: _isLoading
-                        ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    )
-                        : const Icon(
-                      Icons.send,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            onPressed: _sendMessage,
           ),
         ],
       ),

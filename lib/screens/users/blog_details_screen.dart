@@ -1,333 +1,268 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'profile_screen.dart';
 
-class BlogDetailScreen extends StatefulWidget {
+class BlogDetailScreen extends StatelessWidget {
   final Map<String, dynamic> blog;
-  final Map<String, dynamic>? profile;
+  final Map<String, dynamic>? userData;
+  final bool isOwnProfile;
+  final Function onUpdate;
 
   const BlogDetailScreen({
     super.key,
     required this.blog,
-    this.profile,
+    this.userData,
+    required this.isOwnProfile,
+    required this.onUpdate
   });
 
-  @override
-  State<BlogDetailScreen> createState() => _BlogDetailScreenState();
-}
-
-class _BlogDetailScreenState extends State<BlogDetailScreen> {
-  final _supabase = Supabase.instance.client;
-  bool _isLiked = false;
-  int _likesCount = 0;
-  bool _isLoading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _likesCount = widget.blog['likes'] ?? 0;
-    _checkIfLiked();
-  }
-
-  Future<void> _checkIfLiked() async {
-    final user = _supabase.auth.currentUser;
-    if (user == null) return;
-
-    try {
-      final like = await _supabase
-          .from('blog_likes')
-          .select()
-          .eq('blog_id', widget.blog['id'])
-          .eq('user_id', user.id)
-          .maybeSingle();
-
-      setState(() {
-        _isLiked = like != null;
-      });
-    } catch (e) {
-      print('Ошибка проверки лайка: $e');
+  // Функция-помощник для безопасной загрузки аватарки
+  ImageProvider? _getSafeAvatar(String? url) {
+    if (url == null || url.isEmpty || !url.startsWith('http') || url.contains('%F0%9F%91%A4')) {
+      return null;
     }
-  }
-
-  Future<void> _toggleLike() async {
-    final user = _supabase.auth.currentUser;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Войдите, чтобы ставить лайки'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      if (_isLiked) {
-        await _supabase
-            .from('blog_likes')
-            .delete()
-            .eq('blog_id', widget.blog['id'])
-            .eq('user_id', user.id);
-
-        await _supabase
-            .from('blogs')
-            .update({'likes': _likesCount - 1})
-            .eq('id', widget.blog['id']);
-
-        setState(() {
-          _isLiked = false;
-          _likesCount--;
-        });
-      } else {
-        await _supabase.from('blog_likes').insert({
-          'blog_id': widget.blog['id'],
-          'user_id': user.id,
-        });
-
-        await _supabase
-            .from('blogs')
-            .update({'likes': _likesCount + 1})
-            .eq('id', widget.blog['id']);
-
-        setState(() {
-          _isLiked = true;
-          _likesCount++;
-        });
-      }
-    } catch (e) {
-      print('Ошибка: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
+    return NetworkImage(url);
   }
 
   @override
   Widget build(BuildContext context) {
-    final profile = widget.profile ?? widget.blog['profiles'];
-    final userName = profile?['username'] ?? 'Пользователь';
-    final userAvatar = profile?['avatar_url'] ?? '👤';
-    final createdAt = DateTime.parse(widget.blog['created_at']);
+    final supabase = Supabase.instance.client;
+    final commentController = TextEditingController();
 
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: const Text('Блог'),
-        centerTitle: true,
-        elevation: 0,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Автор
-            GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => ProfileScreen(
-                      userId: widget.blog['user_id'],
-                      userName: userName,
-                    ),
-                  ),
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.03),
-                      blurRadius: 10,
-                      spreadRadius: 2,
-                    ),
-                  ],
+      backgroundColor: Colors.white,
+      body: Stack(
+        children: [
+          CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              SliverAppBar(
+                expandedHeight: 350,
+                pinned: true,
+                backgroundColor: Colors.black,
+                elevation: 0,
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                  onPressed: () => Navigator.pop(context),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF6C63FF), Color(0xFF8B7FFF)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
-                        child: Text(
-                          userAvatar,
-                          style: const TextStyle(fontSize: 24),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            userName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _formatTimeAgo(createdAt),
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                flexibleSpace: FlexibleSpaceBar(
+                  background: blog['image_url'] != null
+                      ? Image.network(blog['image_url'], fit: BoxFit.cover)
+                      : Container(color: Colors.grey[200]),
                 ),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Заголовок
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 10,
-                    spreadRadius: 2,
-                  ),
+                actions: [
+                  if (isOwnProfile)
+                    PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert, color: Colors.white),
+                      onSelected: (value) async {
+                        if (value == 'delete') {
+                          await supabase.from('blogs').delete().eq('id', blog['id']);
+                          Navigator.pop(context);
+                          onUpdate();
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'delete', child: Text("Удалить", style: TextStyle(color: Colors.red))),
+                      ],
+                    ),
                 ],
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.blog['title'] ?? 'Без названия',
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    widget.blog['content'] ?? '',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey[800],
-                      height: 1.6,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Статистика и лайки
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 10,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  InkWell(
-                    onTap: _toggleLike,
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _isLiked
-                            ? Colors.red.withOpacity(0.1)
-                            : Colors.grey[100],
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            _isLiked
-                                ? Icons.favorite
-                                : Icons.favorite_border,
-                            size: 18,
-                            color: _isLiked ? Colors.red : Colors.grey[600],
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '$_likesCount',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: _isLiked ? Colors.red : Colors.grey[600],
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Row(
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.chat_bubble_outline,
-                        size: 18,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(width: 4),
                       Text(
-                        '${widget.blog['comments'] ?? 0}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[500],
+                        blog['title'] ?? '',
+                        style: GoogleFonts.manrope(fontSize: 28, fontWeight: FontWeight.w900, height: 1.2),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // АВТОР БЛОГА
+                      GestureDetector(
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileScreen(userId: blog['user_id']))),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 18,
+                              backgroundImage: _getSafeAvatar(userData?['avatar_url']),
+                              child: _getSafeAvatar(userData?['avatar_url']) == null ? const Icon(Icons.person, size: 18) : null,
+                            ),
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(userData?['username'] ?? "Автор", style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 14)),
+                                Text(_getTimeAgo(blog['created_at']), style: GoogleFonts.manrope(color: Colors.grey, fontSize: 12)),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
+
+                      const SizedBox(height: 30),
+                      Text(blog['content'] ?? '', style: GoogleFonts.manrope(fontSize: 16, height: 1.8, color: const Color(0xFF2D3436))),
+                      const SizedBox(height: 40),
+                      const Divider(thickness: 1, height: 1),
+                      const SizedBox(height: 25),
+                      Text("Комментарии", style: GoogleFonts.manrope(fontSize: 20, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 10),
+
+                      // СПИСОК КОММЕНТАРИЕВ В СТИЛЕ ОТЗЫВОВ
+                      StreamBuilder(
+                        stream: supabase.from('blog_comments')
+                            .stream(primaryKey: ['id'])
+                            .eq('blog_id', blog['id'])
+                            .order('created_at', ascending: false),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox();
+                          final comments = snapshot.data as List;
+                          if (comments.isEmpty) return Padding(
+                            padding: const EdgeInsets.only(top: 20),
+                            child: Text("Пока нет комментариев", style: GoogleFonts.manrope(color: Colors.grey)),
+                          );
+
+                          return ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: comments.length,
+                            separatorBuilder: (context, index) => const Divider(height: 1, thickness: 1, color: Color(0xFFF1F1F1)),
+                            itemBuilder: (context, i) {
+                              final comment = comments[i];
+                              return _buildCommentItem(context, comment);
+                            },
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 120),
                     ],
                   ),
+                ),
+              ),
+            ],
+          ),
+
+          // ПОЛЕ ВВОДА
+          _buildInputArea(supabase, commentController, blog['id']),
+        ],
+      ),
+    );
+  }
+
+  // ВИДЖЕТ ОДНОГО КОММЕНТАРИЯ (КАК ОТЗЫВ)
+  Widget _buildCommentItem(BuildContext context, Map<String, dynamic> comment) {
+    final supabase = Supabase.instance.client;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: FutureBuilder(
+        // Загружаем профиль того, кто оставил коммент
+        future: supabase.from('profiles').select('username, avatar_url').eq('id', comment['user_id']).maybeSingle(),
+        builder: (context, AsyncSnapshot snapshot) {
+          final profile = snapshot.data;
+          final String name = profile?['username'] ?? "Пользователь";
+          final String? avatar = profile?['avatar_url'];
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  GestureDetector(
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileScreen(userId: comment['user_id']))),
+                    child: CircleAvatar(
+                      radius: 16,
+                      backgroundColor: const Color(0xFFF1F1F1),
+                      backgroundImage: _getSafeAvatar(avatar),
+                      child: _getSafeAvatar(avatar) == null ? const Icon(Icons.person, size: 16, color: Colors.grey) : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        GestureDetector(
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileScreen(userId: comment['user_id']))),
+                          child: Text(name, style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 14)),
+                        ),
+                        Text(_getTimeAgo(comment['created_at']), style: GoogleFonts.manrope(color: Colors.grey, fontSize: 11)),
+                      ],
+                    ),
+                  ),
                 ],
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              Text(
+                comment['content'] ?? '',
+                style: GoogleFonts.manrope(fontSize: 14, color: const Color(0xFF2D3436), height: 1.5),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildInputArea(SupabaseClient supabase, TextEditingController controller, dynamic blogId) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))],
+        ),
+        child: SafeArea(
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  style: GoogleFonts.manrope(fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: "Написать комментарий...",
+                    filled: true,
+                    fillColor: const Color(0xFFF1F1F1),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(25), borderSide: BorderSide.none),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: () async {
+                  if (controller.text.trim().isEmpty) return;
+                  await supabase.from('blog_comments').insert({
+                    'blog_id': blogId,
+                    'user_id': supabase.auth.currentUser!.id,
+                    'content': controller.text.trim(),
+                  });
+                  controller.clear();
+                },
+                child: const CircleAvatar(
+                  backgroundColor: Colors.black,
+                  radius: 22,
+                  child: Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  String _formatTimeAgo(DateTime date) {
-    final now = DateTime.now();
-    final difference = now.difference(date);
-
-    if (difference.inSeconds < 60) return 'Только что';
-    if (difference.inMinutes < 60) return '${difference.inMinutes} мин назад';
-    if (difference.inHours < 24) return '${difference.inHours} ч назад';
-    if (difference.inDays < 7) return '${difference.inDays} д назад';
-    if (difference.inDays < 30) return '${difference.inDays ~/ 7} нед назад';
-    if (difference.inDays < 365) return '${difference.inDays ~/ 30} мес назад';
-    return '${difference.inDays ~/ 365} г назад';
+  String _getTimeAgo(String? dateStr) {
+    if (dateStr == null) return "";
+    final date = DateTime.parse(dateStr);
+    final diff = DateTime.now().difference(date);
+    if (diff.inDays >= 30) return "${(diff.inDays / 30).floor()} мес. назад";
+    if (diff.inDays > 0) return "${diff.inDays} дн. назад";
+    if (diff.inHours > 0) return "${diff.inHours} ч. назад";
+    if (diff.inMinutes > 0) return "${diff.inMinutes} мин. назад";
+    return "только что";
   }
 }

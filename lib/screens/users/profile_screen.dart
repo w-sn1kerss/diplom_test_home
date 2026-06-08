@@ -1,15 +1,17 @@
+import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../screens/users/user_items_list_screen.dart';
+import 'blog_details_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String? userId;
   final String? userName;
 
-  const ProfileScreen({
-    super.key,
-    this.userId,
-    this.userName,
-  });
+  const ProfileScreen({super.key, this.userId, this.userName});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -17,325 +19,246 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final _supabase = Supabase.instance.client;
-  final _usernameController = TextEditingController();
-  final _currentPasswordController = TextEditingController();
-  final _newPasswordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
-  final _blogTitleController = TextEditingController();
-  final _blogContentController = TextEditingController();
+  final _picker = ImagePicker();
 
   bool _isLoading = true;
-  bool _isEditing = false;
-  bool _isChangingPassword = false;
-  bool _isAddingBlog = false;
-  bool _showSettings = false;
-
-  String _email = '';
-  String _username = '';
-  String _bio = '';
-  String _avatarUrl = '';
   bool _isOwnProfile = true;
+  Map<String, dynamic>? _userData;
+  List<Map<String, dynamic>> _userBlogs = [];
 
-  // Статистика
-  int _commentsCount = 0;
-  int _blogsCount = 0;
-  int _likesReceived = 0;
-  double _avgRating = 0.0;
+  Map<String, dynamic> _stats = {
+    'read': 0,
+    'achievements': 0,
+    'reviews': 0,
+    'favorites': 0,
+  };
 
-  // Блоги
-  List<Map<String, dynamic>> _blogs = [];
+  late TextEditingController _nameController;
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    _nameController = TextEditingController();
+    _loadInitialData();
   }
 
-  Future<void> _loadUserData() async {
-    setState(() => _isLoading = true);
+  Future<void> _loadInitialData() async {
+    final myId = _supabase.auth.currentUser?.id;
+    // Если widget.userId передан — открываем его, иначе — свой
+    final targetId = widget.userId ?? myId;
+
+    if (targetId == null) return;
+
+    // Устанавливаем флаг: мой это профиль или чужой (чтобы скрыть кнопку "Добавить блог")
+    _isOwnProfile = (targetId == myId);
 
     try {
-      final currentUser = _supabase.auth.currentUser;
-      final targetUserId = widget.userId ?? currentUser?.id;
+      final responses = await Future.wait([
+        _supabase.from('profiles').select().eq('id', targetId).single(),
+        _supabase.from('user_stats').select().eq('user_id', targetId).maybeSingle(),
+        _supabase.from('blogs').select().eq('user_id', targetId).order('created_at', ascending: false),
+        _supabase.from('user_achievements').count().eq('user_id', targetId),
+      ]);
 
-      if (targetUserId == null) throw Exception('Пользователь не найден');
-
-      _isOwnProfile = currentUser?.id == targetUserId;
-
-      // Загружаем профиль из таблицы profiles
-      final profile = await _supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', targetUserId)
-          .maybeSingle();
-
-      if (profile != null) {
-        _username = profile['username'] ?? widget.userName ?? 'Пользователь';
-        _bio = profile['bio'] ?? '';
-        _avatarUrl = profile['avatar_url'] ?? '';
-      } else {
-        _username = widget.userName ?? 'Пользователь';
-      }
-
-      _usernameController.text = _username;
-
-      // Загружаем email для своего профиля
-      if (_isOwnProfile) {
-        _email = currentUser?.email ?? 'Не указан';
-      }
-
-      // Загружаем статистику
-      await _loadUserStats(targetUserId);
-
-      // Загружаем блоги
-      await _loadUserBlogs(targetUserId);
-
-    } catch (e) {
-      print('Ошибка загрузки профиля: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Ошибка загрузки: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _loadUserStats(String userId) async {
-    try {
-      // Количество комментариев
-      final comments = await _supabase
-          .from('book_comments')
-          .select('id')
-          .eq('user_id', userId);
-      _commentsCount = comments.length;
-
-      // Количество блогов
-      final blogs = await _supabase
-          .from('blogs')
-          .select('id')
-          .eq('user_id', userId);
-      _blogsCount = blogs.length;
-
-      // Полученные лайки на комментарии
-      final userComments = await _supabase
-          .from('book_comments')
-          .select('id')
-          .eq('user_id', userId);
-
-      int likes = 0;
-      for (var comment in userComments) {
-        final commentLikes = await _supabase
-            .from('comment_likes')
-            .select('id')
-            .eq('comment_id', comment['id']);
-        likes += commentLikes.length;
-      }
-      _likesReceived = likes;
-
-      // Средний рейтинг комментариев
-      final ratings = await _supabase
-          .from('book_comments')
-          .select('rating')
-          .eq('user_id', userId)
-          .not('rating', 'is', null);
-
-      if (ratings.isNotEmpty) {
-        double sum = 0;
-        int count = 0;
-        for (var r in ratings) {
-          final rating = r['rating'] as num?;
-          if (rating != null) {
-            sum += rating.toDouble();
-            count++;
-          }
-        }
-        _avgRating = count > 0 ? sum / count : 0.0;
+      if (mounted) {
+        setState(() {
+          _userData = responses[0] as Map<String, dynamic>;
+          final statsData = responses[1] as Map<String, dynamic>?;
+          _stats = {
+            'read': statsData?['books_read_count'] ?? 0,
+            'achievements': responses[3] as int,
+            'reviews': statsData?['reviews_count'] ?? 0,
+            'favorites': 0,
+          };
+          _userBlogs = (responses[2] as List<dynamic>).cast<Map<String, dynamic>>();
+          _nameController.text = _userData?['username'] ?? widget.userName ?? "Пользователь";
+          _isLoading = false;
+        });
       }
     } catch (e) {
-      print('Ошибка загрузки статистики: $e');
+      debugPrint("Ошибка загрузки данных: $e");
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _loadUserBlogs(String userId) async {
-    try {
-      print('Загрузка блогов пользователя: $userId');
+  // --- ЛОГИКА РЕДАКТИРОВАНИЯ ПРОФИЛЯ ---
+  Future<void> _editProfile() async {
+    final nameEditController = TextEditingController(text: _userData?['username']);
+    final bioEditController = TextEditingController(text: _userData?['bio']);
+    File? newAvatar;
 
-      final blogs = await _supabase
-          .from('blogs')
-          .select('''
-          *,
-          profiles!user_id (
-            username,
-            avatar_url
-          )
-        ''')
-          .eq('user_id', userId)
-          .order('created_at', ascending: false);
-
-      print('Загружено блогов пользователя: ${blogs.length}');
-
-      setState(() {
-        _blogs = List<Map<String, dynamic>>.from(blogs);
-        _blogsCount = blogs.length;
-      });
-    } catch (e) {
-      print('Ошибка загрузки блогов: $e');
-      print('Стек трейс: ${e.toString()}');
-      setState(() {
-        _blogs = [];
-        _blogsCount = 0;
-      });
-    }
-  }
-
-  Future<void> _updateUsername() async {
-    if (_usernameController.text.isEmpty) {
-      _showSnackBar('Введите имя пользователя', Colors.red);
-      return;
-    }
-
-    setState(() => _isEditing = true);
-
-    try {
-      final currentUser = _supabase.auth.currentUser;
-      if (currentUser == null) throw Exception('Не авторизован');
-
-      await _supabase.from('profiles').upsert({
-        'id': currentUser.id,
-        'username': _usernameController.text,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
-
-      setState(() {
-        _username = _usernameController.text;
-        _showSettings = false;
-      });
-
-      _showSnackBar('Имя обновлено', Colors.green);
-    } catch (e) {
-      _showSnackBar('Ошибка: $e', Colors.red);
-    } finally {
-      setState(() => _isEditing = false);
-    }
-  }
-
-  Future<void> _updatePassword() async {
-    if (_newPasswordController.text.length < 6) {
-      _showSnackBar('Пароль должен содержать минимум 6 символов', Colors.red);
-      return;
-    }
-
-    if (_newPasswordController.text != _confirmPasswordController.text) {
-      _showSnackBar('Пароли не совпадают', Colors.red);
-      return;
-    }
-
-    setState(() => _isChangingPassword = true);
-
-    try {
-      await _supabase.auth.updateUser(
-        UserAttributes(password: _newPasswordController.text),
-      );
-
-      _currentPasswordController.clear();
-      _newPasswordController.clear();
-      _confirmPasswordController.clear();
-      setState(() => _showSettings = false);
-
-      _showSnackBar('Пароль изменен', Colors.green);
-    } catch (e) {
-      _showSnackBar('Ошибка: $e', Colors.red);
-    } finally {
-      setState(() => _isChangingPassword = false);
-    }
-  }
-
-  Future<void> _addBlog() async {
-    if (_blogTitleController.text.isEmpty || _blogContentController.text.isEmpty) {
-      _showSnackBar('Заполните все поля', Colors.red);
-      return;
-    }
-
-    setState(() => _isAddingBlog = true);
-
-    try {
-      final currentUser = _supabase.auth.currentUser;
-      if (currentUser == null) throw Exception('Не авторизован');
-
-      await _supabase.from('blogs').insert({
-        'user_id': currentUser.id,
-        'title': _blogTitleController.text,
-        'content': _blogContentController.text,
-        'created_at': DateTime.now().toIso8601String(),
-        'likes': 0,
-        'comments': 0,
-      });
-
-      _blogTitleController.clear();
-      _blogContentController.clear();
-      setState(() => _isAddingBlog = false);
-
-      await _loadUserBlogs(currentUser.id);
-      _showSnackBar('Блог опубликован!', Colors.green);
-    } catch (e) {
-      _showSnackBar('Ошибка: $e', Colors.red);
-      setState(() => _isAddingBlog = false);
-    }
-  }
-
-  Future<void> _deleteBlog(String blogId) async {
-    final confirmed = await showDialog<bool>(
+    await showModalBottomSheet(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Удалить блог?'),
-        content: const Text('Это действие нельзя отменить.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена'),
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+              left: 25, right: 25, top: 25
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text("Редактировать профиль", style: GoogleFonts.manrope(fontSize: 22, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 25),
+                GestureDetector(
+                  onTap: () async {
+                    final XFile? image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
+                    if (image != null) setModalState(() => newAvatar = File(image.path));
+                  },
+                  child: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      CircleAvatar(
+                        radius: 50,
+                        backgroundColor: Colors.grey[200],
+                        backgroundImage: newAvatar != null
+                            ? FileImage(newAvatar!)
+                            : (_userData?['avatar_url'] != null ? NetworkImage(_userData!['avatar_url']) : null) as ImageProvider?,
+                        child: newAvatar == null && _userData?['avatar_url'] == null
+                            ? const Icon(Icons.person, size: 40) : null,
+                      ),
+                      const CircleAvatar(
+                        radius: 18,
+                        backgroundColor: Colors.black,
+                        child: Icon(Icons.camera_alt, size: 16, color: Colors.white),
+                      )
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 25),
+                TextField(
+                  controller: nameEditController,
+                  maxLength: 12,
+                  decoration: InputDecoration(
+                    labelText: "Ваше имя",
+                    counterText: "",
+                    filled: true,
+                    fillColor: Colors.grey[50],
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+                  ),
+                ),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: bioEditController,
+                  maxLines: 5,
+                  minLines: 3,
+                  decoration: InputDecoration(
+                    labelText: "О себе",
+                    alignLabelWithHint: true,
+                    filled: true,
+                    fillColor: Colors.grey[50],
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+                  ),
+                ),
+                const SizedBox(height: 25),
+                SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                    onPressed: () async {
+                      try {
+                        String? avatarUrl = _userData?['avatar_url'];
+                        if (newAvatar != null) {
+                          final name = 'avatar_${_supabase.auth.currentUser!.id}.jpg';
+                          await _supabase.storage.from('avatars').upload(name, newAvatar!, fileOptions: const FileOptions(upsert: true));
+                          avatarUrl = _supabase.storage.from('avatars').getPublicUrl(name);
+                        }
+                        await _supabase.from('profiles').update({'username': nameEditController.text, 'bio': bioEditController.text, 'avatar_url': avatarUrl}).eq('id', _supabase.auth.currentUser!.id);
+                        if (mounted) { Navigator.pop(context); _loadInitialData(); }
+                      } catch (e) { debugPrint("Ошибка обновления: $e"); }
+                    },
+                    child: Text("Сохранить", style: GoogleFonts.manrope(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 30),
+              ],
             ),
-            child: const Text('Удалить'),
           ),
-        ],
+        ),
       ),
     );
-
-    if (confirmed == true) {
-      try {
-        await _supabase
-            .from('blogs')
-            .delete()
-            .eq('id', blogId);
-
-        final currentUser = _supabase.auth.currentUser;
-        if (currentUser != null) {
-          await _loadUserBlogs(currentUser.id);
-          await _loadUserStats(currentUser.id);
-        }
-
-        _showSnackBar('Блог удален', Colors.green);
-      } catch (e) {
-        _showSnackBar('Ошибка: $e', Colors.red);
-      }
-    }
   }
 
-  void _showSnackBar(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+  // --- ЛОГИКА ЛАЙКОВ ---
+  Future<void> _toggleLike(Map<String, dynamic> blog) async {
+    final userId = _supabase.auth.currentUser!.id;
+    final blogId = blog['id'];
+    try {
+      final existingLike = await _supabase.from('blog_likes').select().eq('blog_id', blogId).eq('user_id', userId).maybeSingle();
+      if (existingLike == null) {
+        await _supabase.from('blog_likes').insert({'blog_id': blogId, 'user_id': userId});
+        await _supabase.from('blogs').update({'likes': (blog['likes'] ?? 0) + 1}).eq('id', blogId);
+      } else {
+        await _supabase.from('blog_likes').delete().eq('blog_id', blogId).eq('user_id', userId);
+        await _supabase.from('blogs').update({'likes': (blog['likes'] ?? 0) - 1}).eq('id', blogId);
+      }
+      _loadInitialData();
+    } catch (e) { debugPrint("Ошибка лайка: $e"); }
+  }
+
+  Future<void> _upsertBlog({Map<String, dynamic>? existingBlog}) async {
+    final titleController = TextEditingController(text: existingBlog?['title']);
+    final contentController = TextEditingController(text: existingBlog?['content']);
+    File? selectedImage;
+    String? currentImageUrl = existingBlog?['image_url'];
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 25, right: 25, top: 25),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(existingBlog == null ? "Новая запись" : "Редактирование", style: GoogleFonts.manrope(fontSize: 22, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 20),
+                GestureDetector(
+                  onTap: () async {
+                    final XFile? image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
+                    if (image != null) setModalState(() => selectedImage = File(image.path));
+                  },
+                  child: Container(
+                    height: 160, width: double.infinity,
+                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.grey[300]!, width: 1)),
+                    child: selectedImage != null
+                        ? ClipRRect(borderRadius: BorderRadius.circular(20), child: Image.file(selectedImage!, fit: BoxFit.cover))
+                        : (currentImageUrl != null
+                        ? ClipRRect(borderRadius: BorderRadius.circular(20), child: Image.network(currentImageUrl!, fit: BoxFit.cover))
+                        : Column(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.add_a_photo_outlined, size: 40, color: Colors.grey), const SizedBox(height: 8), Text("Добавить фото", style: GoogleFonts.manrope(color: Colors.grey))])),
+                  ),
+                ),
+                const SizedBox(height: 15),
+                TextField(controller: titleController, decoration: InputDecoration(hintText: "Заголовок", filled: true, fillColor: Colors.grey[50], border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none))),
+                const SizedBox(height: 10),
+                TextField(controller: contentController, maxLines: 5, decoration: InputDecoration(hintText: "Ваша история...", filled: true, fillColor: Colors.grey[50], border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none))),
+                const SizedBox(height: 20),
+                SizedBox(width: double.infinity, height: 55, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))), onPressed: () async {
+                  if (titleController.text.trim().isEmpty) return;
+                  try {
+                    String? imageUrl = currentImageUrl;
+                    if (selectedImage != null) {
+                      final fileName = 'blog_${DateTime.now().millisecondsSinceEpoch}.jpg';
+                      await _supabase.storage.from('blog-images').upload(fileName, selectedImage!);
+                      imageUrl = _supabase.storage.from('blog-images').getPublicUrl(fileName);
+                    }
+                    final blogData = {'user_id': _supabase.auth.currentUser!.id, 'title': titleController.text.trim(), 'content': contentController.text.trim(), 'image_url': imageUrl};
+                    if (existingBlog == null) { await _supabase.from('blogs').insert(blogData); } else { await _supabase.from('blogs').update(blogData).eq('id', existingBlog['id']); }
+                    if (mounted) { Navigator.pop(context); _loadInitialData(); }
+                  } catch (e) { debugPrint("ОШИБКА: $e"); }
+                }, child: Text("Сохранить", style: GoogleFonts.manrope(color: Colors.white, fontWeight: FontWeight.bold)))),
+                const SizedBox(height: 30),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -343,875 +266,508 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator(color: Colors.black)));
+
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: Text(
-          _isOwnProfile ? 'Мой профиль' : 'Профиль',
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        centerTitle: true,
-        elevation: 0,
-        actions: _isOwnProfile
-            ? [
-          IconButton(
-            onPressed: () {
-              setState(() => _showSettings = !_showSettings);
-            },
-            icon: Icon(
-              _showSettings ? Icons.close : Icons.settings,
-              color: _showSettings ? Colors.red : null,
-            ),
-            tooltip: _showSettings ? 'Закрыть' : 'Настройки',
-          ),
-        ]
-            : null,
-      ),
-      body: _isLoading
-          ? const Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF6C63FF),
-        ),
-      )
-          : RefreshIndicator(
-        onRefresh: () async {
-          final currentUser = _supabase.auth.currentUser;
-          if (currentUser != null) {
-            await _loadUserData();
-          }
-        },
-        color: const Color(0xFF6C63FF),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Шапка профиля
-              _buildProfileHeader(),
-
-              if (_showSettings && _isOwnProfile) ...[
-                const SizedBox(height: 24),
-                _buildSettingsSection(),
-              ],
-
-              const SizedBox(height: 24),
-
-              // Статистика
-              _buildStatsSection(),
-
-              const SizedBox(height: 32),
-
-              // Секция блогов
-              _buildBlogsSection(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProfileHeader() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            spreadRadius: 2,
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Аватар
-          Stack(
-            children: [
-              Container(
-                width: 100,
-                height: 100,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF6C63FF), Color(0xFF8B7FFF)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white,
-                    width: 3,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 10,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Center(
-                  child: Text(
-                    _username.isNotEmpty ? _username[0].toUpperCase() : '👤',
-                    style: const TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-              if (_isOwnProfile)
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFF6C63FF),
-                        width: 2,
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.camera_alt,
-                      size: 16,
-                      color: Color(0xFF6C63FF),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _username,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-              color: Colors.black87,
-            ),
-          ),
-          if (_bio.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              _bio,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-          if (_isOwnProfile) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 6,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFF6C63FF).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                'ID: ${_supabase.auth.currentUser?.id?.substring(0, 8)}...',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSettingsSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            spreadRadius: 2,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.settings,
-                  size: 20,
-                  color: Color(0xFF6C63FF),
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Text(
-                'Настройки профиля',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-
-          // Имя пользователя
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.grey[50],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Имя пользователя',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _usernameController,
-                  decoration: InputDecoration(
-                    hintText: 'Введите имя',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF6C63FF)),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isEditing ? null : _updateUsername,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6C63FF),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _isEditing
-                        ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    )
-                        : const Text('Сохранить имя'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Смена пароля
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.grey[50],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Изменить пароль',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _currentPasswordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Текущий пароль',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF6C63FF)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _newPasswordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Новый пароль',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF6C63FF)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _confirmPasswordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Подтвердите пароль',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF6C63FF)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isChangingPassword ? null : _updatePassword,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6C63FF),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _isChangingPassword
-                        ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    )
-                        : const Text('Изменить пароль'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Выход
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () async {
-                await _supabase.auth.signOut();
-                if (context.mounted) {
-                  Navigator.pop(context);
-                  _showSnackBar('Вы вышли из аккаунта', Colors.green);
-                }
-              },
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.red),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              child: const Text(
-                'Выйти из аккаунта',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.red,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatsSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            spreadRadius: 2,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.analytics,
-                  size: 20,
-                  color: Color(0xFF6C63FF),
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Text(
-                'Статистика',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildStatItem(_commentsCount.toString(), 'Комментариев'),
-              _buildStatItem(_blogsCount.toString(), 'Блогов'),
-              _buildStatItem(_likesReceived.toString(), 'Лайков'),
-              _buildStatItem(_avgRating.toStringAsFixed(1), 'Рейтинг'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBlogsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      backgroundColor: const Color(0xFFE9EEF2),
+      body: RefreshIndicator(
+        onRefresh: _loadInitialData,
+        color: Colors.black,
+        child: Stack( // Используем Stack, чтобы кнопка была поверх всего
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.article,
-                    size: 20,
-                    color: Color(0xFF6C63FF),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Text(
-                  'Блоги',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-              ],
-            ),
-            if (_isOwnProfile)
-              TextButton.icon(
-                onPressed: () {
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    backgroundColor: Colors.transparent,
-                    builder: (context) => _buildAddBlogSheet(),
-                  );
-                },
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Написать'),
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF6C63FF),
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 16),
-
-        if (_blogs.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
-                  blurRadius: 10,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                Icon(
-                  Icons.article_outlined,
-                  size: 48,
-                  color: Colors.grey[400],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _isOwnProfile
-                      ? 'У вас пока нет блогов'
-                      : 'У пользователя нет блогов',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                if (_isOwnProfile) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Напишите первый блог!',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[500],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          )
-        else
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _blogs.length,
-            itemBuilder: (context, index) {
-              final blog = _blogs[index];
-              return _buildBlogCard(blog);
-            },
-          ),
-      ],
-    );
-  }
-
-  Widget _buildAddBlogSheet() {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.8,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(24),
-        ),
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: Colors.grey[200]!,
-                ),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Отмена'),
-                ),
-                const Text(
-                  'Новый блог',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                TextButton(
-                  onPressed: _isAddingBlog ? null : () async {
-                    await _addBlog();
-                    if (mounted) Navigator.pop(context);
-                  },
-                  child: _isAddingBlog
-                      ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF6C63FF),
-                      strokeWidth: 2,
-                    ),
-                  )
-                      : const Text(
-                    'Опубликовать',
-                    style: TextStyle(
-                      color: Color(0xFF6C63FF),
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _blogTitleController,
-                    decoration: const InputDecoration(
-                      labelText: 'Заголовок',
-                      border: OutlineInputBorder(),
-                      hintText: 'Введите заголовок блога',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _blogContentController,
-                    maxLines: null,
-                    minLines: 10,
-                    decoration: const InputDecoration(
-                      labelText: 'Содержание',
-                      border: OutlineInputBorder(),
-                      hintText: 'О чем хотите рассказать?',
-                      alignLabelWithHint: true,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBlogCard(Map<String, dynamic> blog) {
-    final profile = blog['profiles'] as Map<String, dynamic>?;
-    final userName = profile?['username'] ?? _username;
-    final userAvatar = profile?['avatar_url'] ?? '👤';
-    final isOwnBlog = _supabase.auth.currentUser?.id == blog['user_id'];
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 6,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Шапка блога
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    userAvatar,
-                    style: const TextStyle(fontSize: 18),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
+            SingleChildScrollView(
+              physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      userName,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _formatTimeAgo(DateTime.parse(blog['created_at'])),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[500],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (isOwnBlog)
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, size: 20),
-                  onSelected: (value) {
-                    if (value == 'delete') {
-                      _deleteBlog(blog['id']);
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete, size: 18, color: Colors.red),
-                          SizedBox(width: 8),
-                          Text('Удалить'),
+                    const SizedBox(height: 60),
+
+                    // ЗАГОЛОВОК С УЧЕТОМ КНОПКИ НАЗАД
+                    Row(
+                      children: [
+                        if (!_isOwnProfile) ...[
+                          GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 10,
+                                  )
+                                ],
+                              ),
+                              child: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: Colors.black),
+                            ),
+                          ),
+                          const SizedBox(width: 15),
                         ],
-                      ),
+                        Text(
+                            _isOwnProfile ? "Профиль" : "Автор",
+                            style: GoogleFonts.manrope(
+                                fontSize: 32,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -1
+                            )
+                        ),
+                      ],
                     ),
+
+                    const SizedBox(height: 20),
+                    _buildMainProfileCard(),
+                    const SizedBox(height: 15),
+                    _buildStatsGrid(),
+                    const SizedBox(height: 25),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("Публикации", style: GoogleFonts.manrope(fontSize: 22, fontWeight: FontWeight.w800)),
+                        if (_isOwnProfile) IconButton(onPressed: () => _upsertBlog(), icon: const Icon(Icons.add_circle, size: 32, color: Colors.black)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildBlogsList(),
+                    const SizedBox(height: 50),
                   ],
                 ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // Заголовок блога
-          Text(
-            blog['title'] ?? 'Без названия',
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-
-          // Содержание
-          Text(
-            blog['content'] ?? '',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[800],
-              height: 1.5,
-            ),
-            maxLines: 5,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 16),
-
-          // Статистика
-          Row(
-            children: [
-              Icon(
-                Icons.favorite_border,
-                size: 16,
-                color: Colors.grey[400],
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '${blog['likes'] ?? 0}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[500],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Icon(
-                Icons.chat_bubble_outline,
-                size: 16,
-                color: Colors.grey[400],
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '${blog['comments'] ?? 0}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[500],
-                ),
-              ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildStatItem(String value, String label) {
-    return Column(
+  // --- НОВАЯ КАРТОЧКА ПРОФИЛЯ С БЛЮРОМ ---
+  Widget _buildMainProfileCard() {
+    final avatarUrl = _userData?['avatar_url'];
+    final safeImage = _getSafeAvatar(avatarUrl);
+
+    return Stack(
+      alignment: Alignment.topCenter,
       children: [
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF6C63FF),
+        Container(
+          height: 320,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(40),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10))],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(40),
+            child: Stack(
+              children: [
+                // Фон карточки (размытое фото)
+                Positioned.fill(
+                  child: safeImage != null
+                      ? Image(image: safeImage, fit: BoxFit.cover)
+                      : Container(color: const Color(0xFFD6E2E8)),
+                ),
+                Positioned.fill(
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+                    child: Container(color: Colors.white.withOpacity(0.2)),
+                  ),
+                ),
+                if (_isOwnProfile)
+                  Positioned(
+                    top: 20, right: 20,
+                    child: IconButton(
+                      onPressed: _editProfile,
+                      icon: const Icon(Icons.edit_note_rounded, size: 32, color: Colors.black87),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-            fontWeight: FontWeight.w500,
+        Padding(
+          padding: const EdgeInsets.only(top: 40),
+          child: Column(
+            children: [
+              // Основная круглая аватарка
+              Container(
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 4),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10)]
+                ),
+                child: CircleAvatar(
+                  radius: 55,
+                  backgroundColor: Colors.white,
+                  backgroundImage: safeImage,
+                  child: safeImage == null
+                      ? const Icon(Icons.person, size: 50, color: Colors.grey)
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 15),
+              Text(_nameController.text, style: GoogleFonts.manrope(fontSize: 26, fontWeight: FontWeight.w900)),
+              Text("Участник сообщества", style: GoogleFonts.manrope(color: Colors.black54, fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              // ... (остальной блок с Email и "О себе" остается без изменений)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 25),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(30),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                    child: Container(
+                      padding: const EdgeInsets.all(20),
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.4),
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
+                      ),
+                      child: Column(
+                        children: [
+                          _buildInfoRow("Email", _supabase.auth.currentUser?.email ?? "—"),
+                          const Divider(color: Colors.white24, height: 15),
+                          _buildInfoRow("О себе", _userData?['bio'] ?? "Нет описания"),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
 
-  String _formatTimeAgo(DateTime date) {
-    final now = DateTime.now();
-    final difference = now.difference(date);
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("$label: ", style: GoogleFonts.manrope(color: Colors.black54, fontWeight: FontWeight.w800, fontSize: 13)),
+          Expanded(child: Text(value, style: GoogleFonts.manrope(fontWeight: FontWeight.w700, color: Colors.black87, fontSize: 13), maxLines: 5, overflow: TextOverflow.ellipsis)),
+        ],
+      ),
+    );
+  }
 
-    if (difference.inSeconds < 60) return 'Только что';
-    if (difference.inMinutes < 60) return '${difference.inMinutes} мин назад';
-    if (difference.inHours < 24) return '${difference.inHours} ч назад';
-    if (difference.inDays < 7) return '${difference.inDays} д назад';
-    if (difference.inDays < 30) return '${difference.inDays ~/ 7} нед назад';
-    if (difference.inDays < 365) return '${difference.inDays ~/ 30} мес назад';
-    return '${difference.inDays ~/ 365} г назад';
+  Widget _buildStatsGrid() {
+    return GridView.count(
+      shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 1.1,
+      children: [
+        _buildStatTile("Книги", _stats['read'].toString(), Icons.auto_stories, () => _openDetailList("Прочитанные", "user_recent_activity")),
+        _buildStatTile("Награды", _stats['achievements'].toString(), Icons.emoji_events, () => _openDetailList("Достижения", "user_achievements")),
+        _buildStatTile("Отзывы", _stats['reviews'].toString(), Icons.rate_review, () => _openDetailList("Мои отзывы", "book_comments")),
+        _buildStatTile("Избранное", "0", Icons.favorite, () {}),
+      ],
+    );
+  }
+
+  Widget _buildStatTile(String title, String value, IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(30)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(title, style: GoogleFonts.manrope(fontSize: 14, color: Colors.grey[600], fontWeight: FontWeight.w600)),
+            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text(value, style: GoogleFonts.manrope(fontSize: 28, fontWeight: FontWeight.w800)),
+              const SizedBox(width: 6),
+              Padding(padding: const EdgeInsets.only(bottom: 6), child: Icon(icon, color: Colors.orange, size: 18)),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- НОВЫЙ СПИСОК БЛОГОВ (КАК НА ФОТО) ---
+  Widget _buildBlogsList() {
+    if (_userBlogs.isEmpty) return const Center(child: Text("Записей пока нет"));
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _userBlogs.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 16),
+      itemBuilder: (context, index) {
+        final blog = _userBlogs[index];
+        final blogAvatar = _getSafeAvatar(_userData?['avatar_url']); // Безопасная аватарка
+
+        return GestureDetector(
+          onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => BlogDetailScreen(
+                blog: blog,
+                userData: _userData,
+                isOwnProfile: _isOwnProfile,
+                onUpdate: _loadInitialData,
+              ))
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Картинка самого блога
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: (blog['image_url'] != null && blog['image_url'].toString().startsWith('http'))
+                      ? Image.network(blog['image_url'], width: 100, height: 100, fit: BoxFit.cover)
+                      : Container(width: 100, height: 100, color: Colors.grey[100], child: const Icon(Icons.image)),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(blog['title'] ?? '', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16, height: 1.2), maxLines: 2, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 10,
+                            backgroundImage: blogAvatar,
+                            child: blogAvatar == null ? const Icon(Icons.person, size: 8, color: Colors.white) : null,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              "${_userData?['username']} • ${_getTimeAgo(blog['created_at'])}",
+                              style: GoogleFonts.manrope(fontSize: 11, color: Colors.grey[600], fontWeight: FontWeight.w600),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // --- ДЕТАЛИ БЛОГА С КОММЕНТАРИЯМИ ---
+  void _showBlogDetails(Map<String, dynamic> blog) {
+    final commentController = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.9,
+        maxChildSize: 0.95,
+        builder: (_, controller) => Container(
+          decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(35))
+          ),
+          child: Column(
+            children: [
+              // Полоска сверху для красоты
+              Container(margin: const EdgeInsets.only(top: 12), width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+
+              Expanded(
+                child: ListView(
+                  controller: controller,
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  children: [
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("Публикация", style: GoogleFonts.manrope(fontWeight: FontWeight.w800, color: Colors.grey)),
+                        if (_isOwnProfile) Row(children: [
+                          IconButton(onPressed: () { Navigator.pop(context); _upsertBlog(existingBlog: blog); }, icon: const Icon(Icons.edit_outlined, size: 20)),
+                          IconButton(onPressed: () async {
+                            await _supabase.from('blogs').delete().eq('id', blog['id']);
+                            Navigator.pop(context);
+                            _loadInitialData();
+                          }, icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20))
+                        ])
+                      ],
+                    ),
+                    const SizedBox(height: 15),
+                    Text(blog['title'] ?? '', style: GoogleFonts.manrope(fontSize: 26, fontWeight: FontWeight.w900, height: 1.2)),
+                    const SizedBox(height: 20),
+                    if (blog['image_url'] != null)
+                      ClipRRect(borderRadius: BorderRadius.circular(20), child: Image.network(blog['image_url'], fit: BoxFit.cover)),
+                    const SizedBox(height: 20),
+                    Text(blog['content'] ?? '', style: GoogleFonts.manrope(fontSize: 16, height: 1.7, color: Colors.black87)),
+
+                    const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Divider()),
+
+                    // Секция комментариев
+                    Row(
+                      children: [
+                        const Icon(Icons.mode_comment_outlined, size: 20),
+                        const SizedBox(width: 8),
+                        Text("Комментарии", style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Список комментариев (FutureBuilder остается как был)
+                    FutureBuilder<List<Map<String, dynamic>>>(
+                      // Делаем запрос более надежным
+                      future: _supabase
+                          .from('blog_comments')
+                          .select('*, profiles(username, avatar_url)')
+                          .eq('blog_id', blog['id'])
+                          .order('created_at', ascending: false)
+                          .then((data) => List<Map<String, dynamic>>.from(data)),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.all(20.0),
+                            child: Center(child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2)),
+                          );
+                        }
+                        if (snapshot.hasError) {
+                          return const Center(child: Text("Ошибка загрузки комментариев"));
+                        }
+
+                        final comments = snapshot.data ?? [];
+                        if (comments.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 20),
+                            child: Center(child: Text("Комментариев пока нет", style: GoogleFonts.manrope(color: Colors.grey))),
+                          );
+                        }
+
+                        return ListView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: comments.length,
+                          itemBuilder: (context, i) {
+                            final c = comments[i];
+                            final profile = c['profiles'];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  CircleAvatar(
+                                    radius: 14,
+                                    backgroundImage: profile['avatar_url'] != null ? NetworkImage(profile['avatar_url']) : null,
+                                    child: profile['avatar_url'] == null ? const Icon(Icons.person, size: 14) : null,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text(profile['username'] ?? "Аноним", style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 12)),
+                                            const SizedBox(width: 8),
+                                            Text(_getTimeAgo(c['created_at']), style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(c['content'] ?? "", style: GoogleFonts.manrope(fontSize: 13, color: Colors.black87)),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 100),
+                  ],
+                ),
+              ),
+              // Поле ввода комментария
+              Padding(
+                padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom + 20, left: 20, right: 20, top: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                        child: TextField(
+                            controller: commentController,
+                            decoration: InputDecoration(
+                                hintText: "Написать комментарий...",
+                                filled: true,
+                                fillColor: Color(0xFFF1F5F9),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none)
+                            )
+                        )
+                    ),
+                    const SizedBox(width: 10),
+                    CircleAvatar(
+                        backgroundColor: Colors.black,
+                        child: IconButton(
+                            icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
+                            onPressed: () async {
+                              if (commentController.text.isEmpty) return;
+                              await _supabase.from('blog_comments').insert({'blog_id': blog['id'], 'user_id': _supabase.auth.currentUser!.id, 'content': commentController.text});
+                              await _supabase.from('blogs').update({'comments': (blog['comments'] ?? 0) + 1}).eq('id', blog['id']);
+                              commentController.clear();
+                              setState(() {});
+                            }
+                        )
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getTimeAgo(String? dateStr) {
+    if (dateStr == null) return "";
+    final date = DateTime.parse(dateStr);
+    final diff = DateTime.now().difference(date);
+
+    if (diff.inDays >= 365) {
+      int years = (diff.inDays / 365).floor();
+      return "$years ${years == 1 ? "год" : years < 5 ? "года" : "лет"} назад";
+    } else if (diff.inDays >= 30) {
+      int months = (diff.inDays / 30).floor();
+      return "$months ${months == 1 ? "месяц" : months < 5 ? "месяца" : "месяцев"} назад";
+    } else if (diff.inDays > 0) {
+      return "${diff.inDays} ${diff.inDays == 1 ? "день" : diff.inDays < 5 ? "дня" : "дней"} назад";
+    } else if (diff.inHours > 0) {
+      return "${diff.inHours} ч. назад";
+    } else {
+      return "только что";
+    }
+  }
+
+  void _openDetailList(String title, String tableName) {
+    Navigator.push(context, MaterialPageRoute(builder: (context) => UserItemsListScreen(title: title, userId: widget.userId ?? _supabase.auth.currentUser!.id, tableName: tableName)));
+  }
+
+  ImageProvider? _getSafeAvatar(String? url) {
+    if (url == null || url.isEmpty || !url.startsWith('http') || url.contains('%F0%9F%91%A4')) {
+      return null;
+    }
+    return NetworkImage(url);
   }
 }

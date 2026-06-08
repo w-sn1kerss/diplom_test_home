@@ -1,48 +1,61 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../models/book_model.dart';
+  import 'package:supabase_flutter/supabase_flutter.dart';
+  import '../models/book_model.dart';
 
-class SupabaseService {
-  final SupabaseClient _supabase = Supabase.instance.client;
+  class SupabaseService {
+    final SupabaseClient _supabase = Supabase.instance.client;
 
-  Future<List<Book>> getBooks() async {
-    try {
-      final response = await _supabase.storage.from('books').list();
+    Future<List<Map<String, dynamic>>> getBlogs({
+      int from = 0,
+      int to = 4,
+      String sortBy = 'newest'
+    }) async {
+      try {
+        PostgrestTransformBuilder<PostgrestList> query = _supabase
+            .from('blogs')
+            .select('*, profiles(username, avatar_url)');
 
-      return response.map((file) {
-        final url = _supabase.storage
-            .from('books')
-            .getPublicUrl(file.name);
+        if (sortBy == 'newest') {
+          query = query.order('created_at', ascending: false);
+        } else {
+          query = query.order('likes', ascending: false);
+        }
 
-        // Определяем тип книги по расширению
-        final extension = file.name.split('.').last.toLowerCase();
-        final isPdf = extension == 'pdf';
-        final isEpub = extension == 'epub';
-        final isFb2 = extension == 'fb2' || file.name.endsWith('.fb2.zip');
+        final response = await query.range(from, to);
+        return List<Map<String, dynamic>>.from(response);
+      } catch (e) {
+        print('Ошибка SupabaseService (getBlogs): $e');
+        return [];
+      }
+    }
 
-        String format = 'Книга';
-        if (isPdf) format = 'PDF';
-        if (isEpub) format = 'EPUB';
-        if (isFb2) format = 'FB2';
+    // Если ты используешь автоматическое получение из Storage:
+    Future<List<Book>> getBooksFromStorage() async {
+      try {
+        final response = await _supabase.storage.from('books').list();
 
-        return Book(
-          id: file.name,
-          title: _extractTitle(file.name),
-          author: 'Неизвестный автор',
-          coverUrl: 'https://via.placeholder.com/150x200/6C63FF/FFFFFF?text=$format',
-          fileUrl: url ?? '',
-          description: 'Книга в формате $format',
-          pages: 0,
-          category: format,
-        );
-      }).toList();
-    } catch (e) {
-      print('Ошибка загрузки книг: $e');
-      return [];
+        return response.map((file) {
+          final url = _supabase.storage.from('books').getPublicUrl(file.name);
+          final extension = file.name.split('.').last.toLowerCase();
+
+          return Book(
+            id: file.name,
+            title: _extractTitle(file.name),
+            author: 'Неизвестный автор',
+            coverUrl: 'https://via.placeholder.com/150x200?text=$extension',
+            fileUrl: url,
+            description: 'Загружено из хранилища',
+            pages: 0,
+            categories: [extension.toUpperCase()],
+          );
+        }).toList();
+      } catch (e) {
+        print('Ошибка загрузки книг: $e');
+        return [];
+      }
+    }
+
+    String _extractTitle(String fileName) {
+      final name = fileName.split('.').first;
+      return name.replaceAll('_', ' ');
     }
   }
-
-  String _extractTitle(String fileName) {
-    final name = fileName.split('.').first;
-    return name.replaceAll('_', ' ');
-  }
-}

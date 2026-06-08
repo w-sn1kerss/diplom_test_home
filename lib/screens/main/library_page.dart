@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; // Добавил для доступа к Auth и DB
 import '../../services/book_service.dart';
 import '../../models/book_model.dart';
+import '../../services/supabase_comments_service.dart';
 import '../reader/book_reader_screen.dart';
-import '../users/book_comments_screen.dart';
 
 class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key});
@@ -11,251 +12,264 @@ class LibraryPage extends StatefulWidget {
   State<LibraryPage> createState() => _LibraryPageState();
 }
 
-class _LibraryPageState extends State<LibraryPage> {
+class _LibraryPageState extends State<LibraryPage> with SingleTickerProviderStateMixin {
   final BookService _bookService = BookService();
+  final _supabase = Supabase.instance.client;
+
+  late TabController _tabController;
+
   List<Book> _books = [];
+  List<Book> _downloadedBooks = [];
+  List<String> _downloadedIds = [];
+  List<String> _recentIds = []; // Для сортировки "Недавние"
+
+  // Фильтры
+  String _selectedGenre = 'Все жанры';
+  List<String> _availableGenres = ['Все жанры'];
+  String _sortBy = 'Недавние'; // Для "Моих книг"
+
   bool _isLoading = true;
   String _searchQuery = '';
-  String _selectedCategory = 'Все';
+  bool _isGridView = true;
 
-  final List<String> _categories = [
-    'Все',
-    'Классика',
-    'Детская литература',
-    'Фантастика',
-    'Детектив',
-  ];
+  final Color _bgOffWhite = const Color(0xFFF8F9FB);
+  final Color _textPrimary = const Color(0xFF1A1A1A);
+  final Color _accentColor = const Color(0xFFFF5722);
 
   @override
   void initState() {
     super.initState();
-    _loadBooks();
+    _tabController = TabController(length: 2, vsync: this);
+    _loadData();
   }
 
-  Future<void> _loadBooks() async {
+  Future<void> _loadData() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
+
     try {
-      final books = await _bookService.getBooks();
-      setState(() => _books = books);
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      // Выполняем запросы параллельно для скорости
+      final results = await Future.wait<dynamic>([
+        _supabase.from('user_downloads').select('book_id, books(*)').eq('user_id', userId),
+        _bookService.getBooks(),
+      ]);
+
+      final downloadsRaw = results[0] as List;
+
+      // ИСПРАВЛЕННЫЙ МАППИНГ ДЛЯ "МОИ КНИГИ"
+      final List<Book> downloaded = downloadsRaw.where((d) => d['books'] != null).map((d) {
+        final b = d['books'] as Map<String, dynamic>;
+        return Book(
+          id: b['id'].toString(),
+          title: b['title'] ?? 'Без названия',
+          author: b['author'] ?? 'Неизвестный автор',
+          coverUrl: b['cover_url'] ?? '', // ТЕПЕРЬ ТУТ КАРТИНКА (из новой БД)
+          fileUrl: b['file_url'] ?? '',   // ТЕПЕРЬ ТУТ ФАЙЛ (из новой БД)
+          description: b['description'] ?? '',
+          pages: (b['pages'] as num?)?.toInt() ?? 0,
+          categories: b['categories'] != null ? List<String>.from(b['categories']) : [],
+          rating: (b['rating'] ?? 0).toDouble(), // Не забудь про рейтинг, если он есть в модели
+        );
+      }).toList();
+
+      final allBooks = results[1] as List<Book>;
+
+      final Set<String> genreSet = {'Все жанры'};
+      for (var book in allBooks) {
+        genreSet.addAll(book.categories);
+      }
+
+      if (mounted) {
+        setState(() {
+          _downloadedBooks = downloaded;
+          _downloadedIds = downloaded.map((b) => b.id).toList();
+          _books = allBooks;
+          _availableGenres = genreSet.toList()..sort();
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      print('Ошибка загрузки: $e');
-      setState(() {
-        _books = [
-          Book(
-            id: '7e69c3fd-73c9-4282-9b3d-308c35fe0c9f',
-            title: 'Маленький принц',
-            author: 'Антуан де Сент-Экзюпери',
-            coverUrl: 'https://covers.openlibrary.org/b/id/10410081-L.jpg',
-            fileUrl: '',
-            description: 'Философская сказка',
-            pages: 96,
-            category: 'Детская литература',
-          ),
-          Book(
-            id: '550e8400-e29b-41d4-a716-446655440000',
-            title: 'Война и мир',
-            author: 'Лев Толстой',
-            coverUrl: 'https://covers.openlibrary.org/b/id/7974501-L.jpg',
-            fileUrl: '',
-            description: 'Роман-эпопея',
-            pages: 1225,
-            category: 'Классика',
-          ),
-        ];
-      });
-    } finally {
-      setState(() => _isLoading = false);
+      debugPrint('Ошибка загрузки: $e');
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  List<Book> get _filteredBooks {
-    var filtered = _books;
+  // МЕТОД, КОТОРЫЙ ПРОПАЛ
+  void _handleBookOpen(Book book) async {
+    // Локально обновляем "недавние" для сортировки
+    setState(() {
+      _recentIds.remove(book.id);
+      _recentIds.insert(0, book.id);
+    });
 
-    // Фильтр по поиску
-    if (_searchQuery.isNotEmpty) {
-      filtered = filtered.where((book) {
-        return book.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-            book.author.toLowerCase().contains(_searchQuery.toLowerCase());
-      }).toList();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BookReaderScreen(book: book)),
+    );
+
+    // Обязательно вызываем обновление, так как пользователь
+    // мог скачать или удалить книгу внутри BookReaderScreen
+    _loadData();
+  }
+
+  // ФИЛЬТРАЦИЯ ДЛЯ "МОИ КНИГИ" (Сортировка)
+  List<Book> _applyMyBooksFilters(List<Book> list) {
+    List<Book> filtered = list.where((b) =>
+    b.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+        b.author.toLowerCase().contains(_searchQuery.toLowerCase())
+    ).toList();
+
+    if (_sortBy == 'Название') {
+      filtered.sort((a, b) => a.title.compareTo(b.title));
+    } else if (_sortBy == 'Недавние') {
+      filtered.sort((a, b) {
+        int indexA = _recentIds.indexOf(a.id);
+        int indexB = _recentIds.indexOf(b.id);
+        if (indexA == -1 && indexB == -1) return 0;
+        if (indexA == -1) return 1;
+        if (indexB == -1) return -1;
+        return indexA.compareTo(indexB);
+      });
     }
-
-    // Фильтр по категории
-    if (_selectedCategory != 'Все') {
-      filtered = filtered.where((book) =>
-      book.category.toLowerCase() == _selectedCategory.toLowerCase()
-      ).toList();
-    }
-
     return filtered;
+  }
+
+  // ФИЛЬТРАЦИЯ ДЛЯ "КАТАЛОГ" (Жанры)
+  List<Book> _applyCatalogFilters(List<Book> list) {
+    return list.where((b) {
+      final matchesSearch = b.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          b.author.toLowerCase().contains(_searchQuery.toLowerCase());
+      final matchesGenre = _selectedGenre == 'Все жанры' || b.categories.contains(_selectedGenre);
+      return matchesSearch && matchesGenre;
+    }).toList();
+  }
+
+  void _showSortOrGenrePicker() {
+    bool isCatalog = _tabController.index == 1;
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(isCatalog ? "Выберите жанр" : "Сортировка",
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 10),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: (isCatalog ? _availableGenres : ['Недавние', 'Название']).map((option) => ListTile(
+                    title: Text(option, style: TextStyle(
+                      fontWeight: (isCatalog ? _selectedGenre : _sortBy) == option ? FontWeight.w900 : FontWeight.w500,
+                      color: (isCatalog ? _selectedGenre : _sortBy) == option ? _accentColor : _textPrimary,
+                    )),
+                    onTap: () {
+                      setState(() {
+                        if (isCatalog) _selectedGenre = option; else _sortBy = option;
+                      });
+                      Navigator.pop(context);
+                    },
+                  )).toList(),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final myBooks = _applyMyBooksFilters(_downloadedBooks);
+    final catalogBooks = _applyCatalogFilters(
+        _books.where((b) => !_downloadedIds.contains(b.id.toString())).toList()
+    );
+
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor: _bgOffWhite,
       appBar: AppBar(
-        title: const Text('Библиотека'),
-        centerTitle: true,
+        backgroundColor: _bgOffWhite,
         elevation: 0,
+        centerTitle: true,
+        title: Text('Библиотека', style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w800, fontSize: 20)),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadBooks,
-            tooltip: 'Обновить',
+            icon: Icon(_isGridView ? Icons.view_agenda_outlined : Icons.grid_view_rounded),
+            onPressed: () => setState(() => _isGridView = !_isGridView),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: _accentColor,
+          labelColor: _textPrimary,
+          tabs: const [Tab(text: 'Мои книги'), Tab(text: 'Каталог')],
+          onTap: (index) => setState(() {}), // Обновляем UI для кнопки фильтра/сортировки
+        ),
+      ),
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator(color: _accentColor))
+          : Column(
+        children: [
+          _buildSearchRow(),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildBookDisplay(myBooks),
+                _buildBookDisplay(catalogBooks),
+              ],
+            ),
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
-          : Column(
+    );
+  }
+
+  Widget _buildSearchRow() {
+    bool isCatalog = _tabController.index == 1;
+    String currentLabel = isCatalog ? _selectedGenre : _sortBy;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Row(
         children: [
-          // Поиск
-          Container(
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
-                  blurRadius: 6,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: TextField(
-              decoration: const InputDecoration(
-                hintText: 'Поиск книг...',
-                border: InputBorder.none,
-                icon: Icon(Icons.search, color: Color(0xFF6C63FF)),
-              ),
-              onChanged: (value) => setState(() => _searchQuery = value),
-            ),
-          ),
-
-          // Категории
-          SizedBox(
-            height: 50,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: _categories.length,
-              itemBuilder: (context, index) {
-                final category = _categories[index];
-                final isSelected = category == _selectedCategory;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedCategory = category),
-                  child: Container(
-                    margin: const EdgeInsets.only(right: 12),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? const Color(0xFF6C63FF)
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: isSelected
-                            ? const Color(0xFF6C63FF)
-                            : Colors.grey[300]!,
-                      ),
-                    ),
-                    child: Center(
-                      child: Text(
-                        category,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.grey[600],
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // Заголовок
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Text(
-                  'Все книги',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${_filteredBooks.length}',
-                    style: const TextStyle(
-                      color: Color(0xFF6C63FF),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Список книг
           Expanded(
-            child: _filteredBooks.isEmpty
-                ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.search_off,
-                    size: 80,
-                    color: Colors.grey[300],
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Книги не найдены',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(color: Colors.black.withOpacity(0.04), borderRadius: BorderRadius.circular(10)),
+              child: TextField(
+                onChanged: (v) => setState(() => _searchQuery = v),
+                decoration: const InputDecoration(hintText: 'Поиск...', border: InputBorder.none, icon: Icon(Icons.search, size: 18)),
               ),
-            )
-                : RefreshIndicator(
-              onRefresh: _loadBooks,
-              color: const Color(0xFF6C63FF),
-              child: GridView.builder(
-                padding: const EdgeInsets.all(16),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: 0.75,
-                ),
-                itemCount: _filteredBooks.length,
-                itemBuilder: (context, index) {
-                  final book = _filteredBooks[index];
-                  return BookCard(book: book);
-                },
+            ),
+          ),
+          const SizedBox(width: 12),
+          InkWell(
+            onTap: _showSortOrGenrePicker,
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.black.withOpacity(0.05)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 70),
+                    child: Text(currentLabel, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                  ),
+                  const Icon(Icons.filter_list_rounded, size: 18),
+                ],
               ),
             ),
           ),
@@ -263,133 +277,90 @@ class _LibraryPageState extends State<LibraryPage> {
       ),
     );
   }
+
+  Widget _buildBookDisplay(List<Book> books) {
+    if (books.isEmpty) return Center(child: Text(_searchQuery.isEmpty ? 'Здесь пока ничего нет' : 'Ничего не найдено'));
+    return _isGridView
+        ? GridView.builder(
+      padding: const EdgeInsets.all(20),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 16, mainAxisSpacing: 24, childAspectRatio: 0.58),
+      itemCount: books.length,
+      itemBuilder: (context, i) => _BookGridTile(book: books[i], onOpen: () => _handleBookOpen(books[i])),
+    )
+        : ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      itemCount: books.length,
+      itemBuilder: (context, i) => _BookListTile(book: books[i], onOpen: () => _handleBookOpen(books[i])),
+    );
+  }
 }
 
-// Добавьте класс BookCard
-class BookCard extends StatelessWidget {
+// Виджеты плиток (без изменений, добавлены для полноты кода)
+class _BookGridTile extends StatelessWidget {
   final Book book;
-
-  const BookCard({super.key, required this.book});
+  final VoidCallback onOpen;
+  const _BookGridTile({required this.book, required this.onOpen});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => BookReaderScreen(book: book),
-          ),
-        );
-      },
-      child: Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Обложка
-            Expanded(
-              flex: 3,
+      onTap: onOpen,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
               child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(12),
-                ),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    book.coverUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (c, e, s) => Container(color: Colors.grey[300], child: const Icon(Icons.book)),
+                  )
+              )
+          ),
+          const SizedBox(height: 8),
+          Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          Text(book.author, maxLines: 1, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+}
+
+class _BookListTile extends StatelessWidget {
+  final Book book;
+  final VoidCallback onOpen;
+  const _BookListTile({required this.book, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onOpen,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+        child: Row(
+          children: [
+            ClipRRect(
+                borderRadius: BorderRadius.circular(12),
                 child: Image.network(
                   book.coverUrl,
-                  width: double.infinity,
+                  width: 60, height: 85,
                   fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      color: Colors.grey[200],
-                      child: const Center(
-                        child: Icon(Icons.book, size: 40, color: Colors.grey),
-                      ),
-                    );
-                  },
-                ),
-              ),
+                  errorBuilder: (c, e, s) => Container(width: 60, height: 85, color: Colors.grey[300], child: const Icon(Icons.book)),
+                )
             ),
-            // Информация
+            const SizedBox(width: 16),
             Expanded(
-              flex: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          book.title,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          book.author,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[600],
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                    // Кнопка комментариев
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => BookCommentsScreen(
-                                bookId: book.id,
-                                bookTitle: book.title,
-                              ),
-                            ),
-                          );
-                        },
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.chat_bubble_outline,
-                              size: 10,
-                              color: const Color(0xFF6C63FF),
-                            ),
-                            const SizedBox(width: 4),
-                            const Text(
-                              'Обсудить',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Color(0xFF6C63FF),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(book.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  Text(book.author, style: const TextStyle(color: Colors.deepOrange, fontSize: 12, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(book.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                ],
               ),
             ),
           ],
