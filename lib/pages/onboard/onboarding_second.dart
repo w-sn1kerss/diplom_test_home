@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'onboarding_third.dart';
-import '../auth/login_screen.dart';
+import '../auth/login_page.dart';
 
 
 class OnboardingSecond extends StatelessWidget {

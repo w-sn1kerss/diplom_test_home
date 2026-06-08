@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'login_screen.dart';
+import 'login_page.dart';
 
 class ChangePasswordScreen extends StatefulWidget {
   final String email;

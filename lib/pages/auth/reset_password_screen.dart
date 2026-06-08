@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../widgets/code_input_field.dart';
 import '../../widgets/numeric_keyboard.dart';
-import 'login_screen.dart';
+import 'login_page.dart';
 import 'change_password_screen.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
