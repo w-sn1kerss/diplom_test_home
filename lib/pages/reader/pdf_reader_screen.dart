@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../models/book_model.dart';
+import '../../models/book.dart';
 
 class PdfReaderScreen extends StatefulWidget {
   final Book book;

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'; // Добавил для доступа к Auth и DB
 import '../../services/book_service.dart';
-import '../../models/book_model.dart';
+import '../../models/book.dart';
 import '../../services/supabase_comments_service.dart';
 import '../reader/book_reader_screen.dart';
 

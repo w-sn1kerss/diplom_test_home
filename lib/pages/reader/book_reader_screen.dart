@@ -3,7 +3,7 @@
   import 'package:path_provider/path_provider.dart';
   import 'package:dio/dio.dart';
   import 'package:supabase_flutter/supabase_flutter.dart';
-  import '../../models/book_model.dart';
+  import '../../models/book.dart';
   import '../../models/comment_model.dart';
   import '../../services/supabase_comments_service.dart';
   import '../users/book_comments_screen.dart';

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/book_service.dart';
-import '../../models/book_model.dart';
+import '../../models/book.dart';
 import '../reader/book_reader_screen.dart';
 import '../users/blog_details_screen.dart';
 import 'library_page.dart';

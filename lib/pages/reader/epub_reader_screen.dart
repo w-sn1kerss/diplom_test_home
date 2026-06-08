@@ -4,7 +4,7 @@ import 'package:epubx/epubx.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../models/book_model.dart';
+import '../../models/book.dart';
 
 enum ReadingMode { horizontal, vertical }
 

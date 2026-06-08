@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import '../../models/book_model.dart';
+import '../../models/book.dart';
 
 class WebReaderScreen extends StatefulWidget {
   final Book book;
