@@ -1,11 +1,12 @@
+// lib/providers/book_provider.dart
 import 'package:flutter/foundation.dart';
 import '../models/models.dart';
 import '../repositories/book_repository.dart';
+import '../utils/utils.dart';
 
 class BookProvider extends ChangeNotifier {
   final BookRepository _repo;
 
-  // Ð¡Ð¿Ð¸ÑÐ¾Ðº ÐºÐ½Ð¸Ð³
   List<Book> _books = [];
   bool _loadingBooks = false;
   bool _hasMore = true;
@@ -13,23 +14,17 @@ class BookProvider extends ChangeNotifier {
   String? _search;
   String? _category;
 
-  // Ð”ÐµÑ‚Ð°Ð»ÑŒÐ½Ð°Ñ ÑÑ‚Ñ€Ð°Ð½Ð¸Ñ†Ð° ÐºÐ½Ð¸Ð³Ð¸
   Book? _selectedBook;
   bool _loadingBook = false;
 
-  // ÐšÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸Ð¸
   List<BookComment> _comments = [];
   bool _loadingComments = false;
 
-  // Ð—Ð°Ð¼ÐµÑ‚ÐºÐ¸
   List<UserNote> _notes = [];
-
-  // ÐÐµÐ´Ð°Ð²Ð½Ð¾ Ñ‡Ð¸Ñ‚Ð°ÐµÐ¼Ñ‹Ðµ
   List<Map<String, dynamic>> _recentBooks = [];
 
   String? _error;
 
-  // ---- Ð“ÐµÑ‚Ñ‚ÐµÑ€Ñ‹ ----
   List<Book> get books => _books;
   bool get loadingBooks => _loadingBooks;
   bool get hasMore => _hasMore;
@@ -43,7 +38,6 @@ class BookProvider extends ChangeNotifier {
 
   BookProvider(this._repo);
 
-  // ---- Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ð¿ÐµÑ€Ð²Ð¾Ð¹ ÑÑ‚Ñ€Ð°Ð½Ð¸Ñ†Ñ‹ ----
   Future<void> loadBooks({String? category, String? search}) async {
     _page = 0;
     _hasMore = true;
@@ -71,7 +65,6 @@ class BookProvider extends ChangeNotifier {
     }
   }
 
-  // ---- Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° ÑÐ»ÐµÐ´ÑƒÑŽÑ‰ÐµÐ¹ ÑÑ‚Ñ€Ð°Ð½Ð¸Ñ†Ñ‹ ----
   Future<void> loadMore() async {
     if (!_hasMore || _loadingBooks) return;
 
@@ -95,14 +88,11 @@ class BookProvider extends ChangeNotifier {
     }
   }
 
-  // ---- ÐŸÐ¾Ð¸ÑÐº ----
   Future<void> search(String query) => loadBooks(search: query);
 
-  // ---- Ð’Ñ‹Ð±Ð¾Ñ€ ÐºÐ½Ð¸Ð³Ð¸ ----
   Future<void> selectBook(String id) async {
-    // ÐŸÐ¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÐ¼ ÐºÑÑˆÐ¸Ñ€Ð¾Ð²Ð°Ð½Ð½ÑƒÑŽ Ð²ÐµÑ€ÑÐ¸ÑŽ Ð¼Ð³Ð½Ð¾Ð²ÐµÐ½Ð½Ð¾
-    _selectedBook = _repo.getCached(id) ??
-        _books.where((b) => b.id == id).firstOrNull;
+    _selectedBook =
+        _repo.getCached(id) ?? _books.where((b) => b.id == id).firstOrNull;
     _loadingBook = true;
     _error = null;
     notifyListeners();
@@ -117,7 +107,6 @@ class BookProvider extends ChangeNotifier {
     }
   }
 
-  // ---- ÐšÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸Ð¸ ----
   Future<void> loadComments(String bookId) async {
     _loadingComments = true;
     _error = null;
@@ -155,10 +144,10 @@ class BookProvider extends ChangeNotifier {
   }
 
   Future<void> toggleCommentLike(BookComment comment) async {
-    // ÐžÐ¿Ñ‚Ð¸Ð¼Ð¸ÑÑ‚Ð¸Ñ‡Ð½Ð¾Ðµ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ
     final idx = _comments.indexWhere((c) => c.id == comment.id);
     if (idx == -1) return;
 
+    // Оптимистичное обновление
     final updated = comment.isLikedByMe
         ? comment.copyWith(
         likesCount: comment.likesCount - 1, isLikedByMe: false)
@@ -173,14 +162,12 @@ class BookProvider extends ChangeNotifier {
       _comments[idx] = fromServer;
       notifyListeners();
     } catch (e) {
-      // ÐžÑ‚ÐºÐ°Ñ‚ Ð¿Ñ€Ð¸ Ð¾ÑˆÐ¸Ð±ÐºÐµ
-      _comments[idx] = comment;
+      _comments[idx] = comment; // Откат
       _error = handleError(e);
       notifyListeners();
     }
   }
 
-  // ---- Ð—Ð°Ð¼ÐµÑ‚ÐºÐ¸ ----
   Future<void> loadNotes(String bookId) async {
     try {
       _notes = await _repo.getNotes(bookId);
@@ -222,19 +209,26 @@ class BookProvider extends ChangeNotifier {
     }
   }
 
-  // ---- ÐŸÑ€Ð¾Ð³Ñ€ÐµÑÑ Ñ‡Ñ‚ÐµÐ½Ð¸Ñ ----
   Future<void> saveProgress(String bookId, int percent) async {
     try {
       await _repo.saveProgress(bookId: bookId, progressPercent: percent);
     } catch (_) {}
   }
 
-  // ---- ÐÐµÐ´Ð°Ð²Ð½Ð¸Ðµ ÐºÐ½Ð¸Ð³Ð¸ ----
   Future<void> loadRecentBooks() async {
     try {
       _recentBooks = await _repo.getRecentBooks();
       notifyListeners();
     } catch (_) {}
+  }
+
+  void sortBooks(String criteria) {
+    if (criteria == 'rating') {
+      _books.sort((a, b) => b.rating.compareTo(a.rating));
+    } else if (criteria == 'title') {
+      _books.sort((a, b) => a.title.compareTo(b.title));
+    }
+    notifyListeners();
   }
 
   void clearError() {

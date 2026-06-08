@@ -1,3 +1,4 @@
+// lib/models/achievement.dart
 class Achievement {
   final String id;
   final String title;

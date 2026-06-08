@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
-import '../../services/supabase_comments_service.dart';
-import '../../models/comment_model.dart';
+import 'package:provider/provider.dart'; // Добавьте provider
+import '../../models/models.dart'; // Здесь лежит ваш BookComment
+import '../../providers/auth_provider.dart';
+import '../../repositories/book_repository.dart'; // Ваш основной репозиторий
 
 class BookCommentsScreen extends StatefulWidget {
   final String bookId;
   final String bookTitle;
-  final String? bookCoverUrl; // Добавил для отображения обложки как на скриншоте
+  final String? bookCoverUrl;
 
   const BookCommentsScreen({
     super.key,
@@ -19,14 +21,12 @@ class BookCommentsScreen extends StatefulWidget {
 }
 
 class _BookCommentsScreenState extends State<BookCommentsScreen> {
-  final SupabaseCommentsService _commentsService = SupabaseCommentsService();
   final _textController = TextEditingController();
-
   int _selectedRating = 0;
   bool _isLoading = true;
   bool _isPosting = false;
 
-  final Color _accentColor = const Color(0xFFE55A4F); // Ваш оранжевый
+  final Color _accentColor = const Color(0xFFE55A4F);
   final Color _bgColor = const Color(0xFFF8F9FB);
 
   @override
@@ -38,20 +38,25 @@ class _BookCommentsScreenState extends State<BookCommentsScreen> {
   Future<void> _loadUserReview() async {
     setState(() => _isLoading = true);
     try {
-      final comments = await _commentsService.getComments(widget.bookId);
-      final myReview = comments.cast<Comment?>().firstWhere(
-            (c) => _commentsService.isCurrentUser(c!.userId),
+      // Используем репозиторий, который у вас уже есть в main.dart
+      final comments = await context.read<BookRepository>().getBookComments(widget.bookId);
+
+      // Получаем ID текущего пользователя из AuthProvider
+      final myUserId = context.read<AuthProvider>().currentUser;
+
+      final myReview = comments.cast<BookComment?>().firstWhere(
+            (c) => c?.userId == context.read<AuthProvider>().currentUser?.id,
         orElse: () => null,
       );
 
       if (mounted && myReview != null) {
         setState(() {
           _textController.text = myReview.content;
-          _selectedRating = myReview.rating?.toInt() ?? 0;
+          _selectedRating = myReview.rating ?? 0;
         });
       }
     } catch (e) {
-      debugPrint("Ошибка загрузки: $e");
+      debugPrint("Ошибка: $e");
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -67,14 +72,13 @@ class _BookCommentsScreenState extends State<BookCommentsScreen> {
 
     setState(() => _isPosting = true);
     try {
-      await _commentsService.addComment(
+      // Используем ваш метод из BookRepository
+      await context.read<BookRepository>().addComment(
         bookId: widget.bookId,
         content: _textController.text,
-        rating: _selectedRating,
+        rating: _selectedRating, // Убрали .toDouble()
       );
-      if (mounted) {
-        Navigator.pop(context, true); // Возвращаем true для обновления предыдущего экрана
-      }
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),

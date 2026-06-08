@@ -1,13 +1,14 @@
+// lib/repositories/auth_repository.dart
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
 import '../models/models.dart';
-import '../models/profile.dart';
 import '../utils/utils.dart';
+
 class AuthRepository {
   final SupabaseClient _client;
 
   AuthRepository(this._client);
+
   User? get currentUser => _client.auth.currentUser;
   String? get currentUserId => _client.auth.currentUser?.id;
   Stream<AuthState> get authStateChanges => _client.auth.onAuthStateChange;
@@ -18,16 +19,7 @@ class AuthRepository {
     required String username,
     String? fullName,
   }) async {
-    final existing = await _client
-        .from('profiles')
-        .select('id')
-        .eq('username', username.trim())
-        .maybeSingle();
-
-    if (existing != null) {
-      throw const AppException('Имя пользователя уже занято');
-    }
-
+    // 1. Пытаемся создать пользователя
     final response = await _client.auth.signUp(
       email: email.trim(),
       password: password,
@@ -41,28 +33,47 @@ class AuthRepository {
       throw const AppException('Не удалось создать аккаунт');
     }
 
-    try {
-      await _client.from('profiles').upsert({
-        'id': response.user!.id,
-        'username': username.trim(),
-        'full_name': fullName?.trim(),
-        'created_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
-      });
-    } on PostgrestException catch (e) {
-      if (e.code != '23505') rethrow;
-    }
+    // 2. ВАЖНО: Мы не делаем upsert в profiles здесь,
+    // если у вас настроен триггер (Database Trigger), который делает это автоматически.
+    // Если триггера нет, тогда оставьте upsert, но проверьте RLS политики (INSERT).
+  }
 
-    try {
-      await _client.from('user_stats').upsert({
-        'user_id': response.user!.id,
-        'books_read_count': 0,
-        'blogs_count': 0,
-        'reviews_count': 0,
-        'achievements_count': 0,
-        'activity_score': 0,
-      });
-    } catch (_) {}
+  Future<String> uploadAvatar(XFile file) async {
+    final userId = currentUserId;
+    if (userId == null) throw const AppException('Не авторизован');
+
+    final ext = file.name.split('.').last.toLowerCase();
+    final bytes = await file.readAsBytes();
+
+    // ВАЖНО: Используем путь, а не URL для хранения в БД
+    final fileName = '$userId/avatar.$ext';
+
+    await _client.storage.from('avatars').uploadBinary(
+      fileName,
+      bytes,
+      fileOptions: FileOptions(contentType: 'image/$ext', upsert: true),
+    );
+
+    // В БД сохраняем только ПУТЬ к файлу, а не полный URL
+    await _client.from('profiles').update({
+      'avatar_url': fileName,
+      'updated_at': DateTime.now().toIso8601String(),
+    }).eq('id', userId);
+
+    return fileName;
+  }
+
+  Future<Profile?> getProfile() async {
+    final userId = currentUserId;
+    if (userId == null) return null;
+
+    final data = await _client
+        .from('profiles')
+        .select()
+        .eq('id', userId)
+        .maybeSingle();
+
+    return data != null ? Profile.fromJson(data) : null;
   }
 
   Future<void> signIn({
@@ -83,40 +94,6 @@ class AuthRepository {
     await _client.auth.resetPasswordForEmail(email.trim());
   }
 
-  Future<String> uploadAvatar(XFile file) async {
-    final userId = currentUserId;
-    if (userId == null) throw const AppException('Не авторизован');
-
-    final ext = file.name.split('.').last.toLowerCase();
-    if (!['jpg', 'jpeg', 'png', 'webp'].contains(ext)) {
-      throw const AppException('Разрешены только JPG, PNG, WebP');
-    }
-
-    final bytes = await file.readAsBytes();
-    if (bytes.length > 5 * 1024 * 1024) {
-      throw const AppException('Файл слишком большой (максимум 5MB)');
-    }
-
-    final fileName = '$userId/avatar.$ext';
-
-    await _client.storage.from('avatars').uploadBinary(
-      fileName,
-      bytes,
-      fileOptions: FileOptions(
-        contentType: 'image/$ext',
-        upsert: true,
-      ),
-    );
-
-    final url = _client.storage.from('avatars').getPublicUrl(fileName);
-
-    await _client.from('profiles').update({
-      'avatar_url': url,
-      'updated_at': DateTime.now().toIso8601String(),
-    }).eq('id', userId);
-
-    return url;
-  }
 
 
   Future<Profile> updateProfile({
@@ -127,10 +104,24 @@ class AuthRepository {
     final userId = currentUserId;
     if (userId == null) throw const AppException('Не авторизован');
 
+    if (username != null && username.trim().isNotEmpty) {
+      final existing = await _client
+          .from('profiles')
+          .select('id')
+          .eq('username', username.trim())
+          .neq('id', userId)
+          .maybeSingle();
+      if (existing != null) {
+        throw const AppException('Имя пользователя уже занято');
+      }
+    }
+
     final updates = <String, dynamic>{
       'updated_at': DateTime.now().toIso8601String(),
     };
-    if (username != null) updates['username'] = username.trim();
+    if (username != null && username.trim().isNotEmpty) {
+      updates['username'] = username.trim();
+    }
     if (fullName != null) updates['full_name'] = fullName.trim();
     if (bio != null) updates['bio'] = bio.trim();
 

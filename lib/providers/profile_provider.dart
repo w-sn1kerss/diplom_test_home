@@ -1,3 +1,4 @@
+// lib/providers/profile_provider.dart
 import 'package:flutter/foundation.dart';
 import '../models/models.dart';
 import '../repositories/profile_repository.dart';
@@ -56,8 +57,8 @@ class ProfileProvider extends ChangeNotifier {
   }
 
   Future<void> toggleFollow(String targetId) async {
-    // ÐžÐ¿Ñ‚Ð¸Ð¼Ð¸ÑÑ‚Ð¸Ñ‡Ð½Ð¾Ðµ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ
     final wasFollowing = _isFollowing;
+    // Оптимистичное обновление
     _isFollowing = !wasFollowing;
     _followersCount += wasFollowing ? -1 : 1;
     notifyListeners();
@@ -69,7 +70,7 @@ class ProfileProvider extends ChangeNotifier {
         await _repo.follow(targetId);
       }
     } catch (e) {
-      // ÐžÑ‚ÐºÐ°Ñ‚
+      // Откат
       _isFollowing = wasFollowing;
       _followersCount += wasFollowing ? 1 : -1;
       _error = handleError(e);

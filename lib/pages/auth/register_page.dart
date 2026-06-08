@@ -36,47 +36,47 @@ class _RegisterPageState extends State<RegisterPage> {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
-    final success = await context.read<AuthProvider>().signUp(
-      email: _emailCtrl.text,
-      password: _passwordCtrl.text,
-      username: _usernameCtrl.text,
-      fullName: _fullNameCtrl.text.isEmpty ? null : _fullNameCtrl.text,
-    );
+    // Добавим принудительный вывод в консоль, чтобы видеть, что кнопка сработала
+    debugPrint("Начинаем процесс регистрации...");
 
-    if (!mounted) return;
-
-    if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('ÐÐºÐºÐ°ÑƒÐ½Ñ‚ ÑÐ¾Ð·Ð´Ð°Ð½! ÐŸÑ€Ð¾Ð²ÐµÑ€ÑŒÑ‚Ðµ email Ð´Ð»Ñ Ð¿Ð¾Ð´Ñ‚Ð²ÐµÑ€Ð¶Ð´ÐµÐ½Ð¸Ñ'),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
+    try {
+      final success = await context.read<AuthProvider>().signUp(
+        email: _emailCtrl.text.trim(),
+        password: _passwordCtrl.text.trim(),
+        username: _usernameCtrl.text.trim(),
+        fullName: _fullNameCtrl.text.trim().isEmpty ? null : _fullNameCtrl.text.trim(),
       );
-      Navigator.pop(context);
-    } else {
-      final error = context.read<AuthProvider>().error;
-      if (error != null) {
+
+      if (!mounted) return;
+
+      if (success) {
+        // Если регистрация прошла успешно, переходим дальше
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error),
-            backgroundColor: Colors.red.shade600,
-            behavior: SnackBarBehavior.floating,
-          ),
+          const SnackBar(content: Text('Регистрация прошла успешно!'), backgroundColor: Colors.green),
         );
-        context.read<AuthProvider>().clearError();
+        Navigator.pop(context);
+      } else {
+        // Если AuthProvider вернул false, берем ошибку оттуда
+        final error = context.read<AuthProvider>().error;
+        throw Exception(error ?? 'Неизвестная ошибка регистрации');
       }
+    } catch (e) {
+      debugPrint("Ошибка в _submit: $e");
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceAll('Exception: ', '')), backgroundColor: Colors.red),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isLoading =
-    context.select<AuthProvider, bool>((p) => p.status == AuthStatus.loading);
+    final isLoading = context.select<AuthProvider, bool>(
+            (p) => p.status == AuthStatus.loading);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ð ÐµÐ³Ð¸ÑÑ‚Ñ€Ð°Ñ†Ð¸Ñ'),
+        title: const Text('Регистрация'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: isLoading ? null : () => Navigator.pop(context),
@@ -90,26 +90,26 @@ class _RegisterPageState extends State<RegisterPage> {
             children: [
               const SizedBox(height: 16),
 
-              // Ð˜Ð¼Ñ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ñ
+              // Имя пользователя
               TextFormField(
                 controller: _usernameCtrl,
                 textInputAction: TextInputAction.next,
                 autocorrect: false,
                 validator: Validators.username,
                 decoration: const InputDecoration(
-                  labelText: 'Ð˜Ð¼Ñ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ñ *',
+                  labelText: 'Имя пользователя *',
                   prefixIcon: Icon(Icons.alternate_email),
-                  helperText: 'Ð¢Ð¾Ð»ÑŒÐºÐ¾ Ð±ÑƒÐºÐ²Ñ‹, Ñ†Ð¸Ñ„Ñ€Ñ‹ Ð¸ _',
+                  helperText: 'Только буквы, цифры и _',
                 ),
               ),
               const SizedBox(height: 16),
 
-              // ÐŸÐ¾Ð»Ð½Ð¾Ðµ Ð¸Ð¼Ñ (Ð½ÐµÐ¾Ð±ÑÐ·Ð°Ñ‚ÐµÐ»ÑŒÐ½Ð¾)
+              // Полное имя (необязательно)
               TextFormField(
                 controller: _fullNameCtrl,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(
-                  labelText: 'ÐŸÐ¾Ð»Ð½Ð¾Ðµ Ð¸Ð¼Ñ (Ð½ÐµÐ¾Ð±ÑÐ·Ð°Ñ‚ÐµÐ»ÑŒÐ½Ð¾)',
+                  labelText: 'Полное имя (необязательно)',
                   prefixIcon: Icon(Icons.person_outline),
                 ),
               ),
@@ -129,38 +129,38 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
               const SizedBox(height: 16),
 
-              // ÐŸÐ°Ñ€Ð¾Ð»ÑŒ
+              // Пароль
               TextFormField(
                 controller: _passwordCtrl,
                 obscureText: _obscurePassword,
                 textInputAction: TextInputAction.next,
                 validator: Validators.password,
                 decoration: InputDecoration(
-                  labelText: 'ÐŸÐ°Ñ€Ð¾Ð»ÑŒ *',
+                  labelText: 'Пароль *',
                   prefixIcon: const Icon(Icons.lock_outlined),
                   suffixIcon: IconButton(
                     icon: Icon(_obscurePassword
                         ? Icons.visibility_outlined
                         : Icons.visibility_off_outlined),
-                    onPressed: () =>
-                        setState(() => _obscurePassword = !_obscurePassword),
+                    onPressed: () => setState(
+                            () => _obscurePassword = !_obscurePassword),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
 
-              // ÐŸÐ¾Ð´Ñ‚Ð²ÐµÑ€Ð¶Ð´ÐµÐ½Ð¸Ðµ Ð¿Ð°Ñ€Ð¾Ð»Ñ
+              // Подтверждение пароля
               TextFormField(
                 controller: _confirmCtrl,
                 obscureText: _obscureConfirm,
                 textInputAction: TextInputAction.done,
                 validator: (val) {
-                  if (val != _passwordCtrl.text) return 'ÐŸÐ°Ñ€Ð¾Ð»Ð¸ Ð½Ðµ ÑÐ¾Ð²Ð¿Ð°Ð´Ð°ÑŽÑ‚';
+                  if (val != _passwordCtrl.text) return 'Пароли не совпадают';
                   return null;
                 },
                 onFieldSubmitted: (_) => _submit(),
                 decoration: InputDecoration(
-                  labelText: 'ÐŸÐ¾Ð²Ñ‚Ð¾Ñ€Ð¸Ñ‚Ðµ Ð¿Ð°Ñ€Ð¾Ð»ÑŒ *',
+                  labelText: 'Повторите пароль *',
                   prefixIcon: const Icon(Icons.lock_outlined),
                   suffixIcon: IconButton(
                     icon: Icon(_obscureConfirm
@@ -178,30 +178,20 @@ class _RegisterPageState extends State<RegisterPage> {
                 onPressed: isLoading ? null : _submit,
                 child: isLoading
                     ? const SizedBox(
-                  height: 20,
-                  width: 20,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2,
-                  ),
-                )
-                    : const Text(
-                  'Ð—Ð°Ñ€ÐµÐ³Ð¸ÑÑ‚Ñ€Ð¸Ñ€Ð¾Ð²Ð°Ñ‚ÑŒÑÑ',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                    : const Text('Зарегистрироваться',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w600)),
               ),
 
               const SizedBox(height: 16),
 
               Text(
-                '* â€” Ð¾Ð±ÑÐ·Ð°Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ Ð¿Ð¾Ð»Ñ',
-                style: TextStyle(
-                  color: Colors.grey.shade500,
-                  fontSize: 12,
-                ),
+                '* — обязательные поля',
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
               ),
             ],
           ),

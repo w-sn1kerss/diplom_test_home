@@ -29,15 +29,19 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
   bool _isLoading = true;
   bool _showUI = true;
 
-  // --- ХРАНЕНИЕ ЗАМЕТОК ДЛЯ ДИПЛОМА ---
-  List<Map<String, dynamic>> _bookNotes = []; // Заметки текущей книги
-
+  List<Map<String, dynamic>> _bookNotes = [];
   double _fontSize = 18.0;
   double _horizontalPadding = 25.0;
   int _themeIndex = 0;
   ReadingMode _readingMode = ReadingMode.horizontal;
 
   final _supabase = Supabase.instance.client;
+
+  // Безопасное преобразование цвета
+  Color hexToColor(String? hex) {
+    if (hex == null || hex.isEmpty) return Colors.yellow;
+    return Color(int.tryParse(hex.replaceAll('#', '0xFF')) ?? 0xFFFFFF00);
+  }
 
   @override
   void initState() {
@@ -49,34 +53,88 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
 
   Future<void> _initReader() async {
     final prefs = await SharedPreferences.getInstance();
-    _fontSize = prefs.getDouble('fontSize') ?? 18.0;
-    _themeIndex = prefs.getInt('themeIndex') ?? 0;
-    _readingMode = ReadingMode.values[prefs.getInt('readingMode') ?? 0];
-    _currentProgress = prefs.getDouble('book_${widget.book.id}_progress') ?? 0.0;
-    _horizontalPadding = prefs.getDouble('hPadding') ?? 25.0;
+    if (!mounted) return;
+
+    setState(() {
+      _fontSize = prefs.getDouble('fontSize') ?? 18.0;
+      _themeIndex = prefs.getInt('themeIndex') ?? 0;
+      _readingMode = ReadingMode.values[prefs.getInt('readingMode') ?? 0];
+      _currentProgress = prefs.getDouble('book_${widget.book.id}_progress') ?? 0.0;
+      _horizontalPadding = prefs.getDouble('hPadding') ?? 25.0;
+    });
 
     await _loadAndCleanEpub();
     _repaginate();
-    await _loadNotesFromSupabase(); // Загружаем аннотации
+    await _loadNotesFromSupabase();
 
-    setState(() => _isLoading = false);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToProgress(_currentProgress));
+    if (mounted) {
+      setState(() => _isLoading = false);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToProgress(_currentProgress));
+    }
   }
 
-  // --- РАБОТА С АННОТАЦИЯМИ (SUPABASE) ---
+  Future<void> _loadAndCleanEpub() async {
+    try {
+      final file = File(widget.filePath);
+      final bytes = await file.readAsBytes();
+      final book = await EpubReader.readBook(bytes);
+
+      StringBuffer buffer = StringBuffer();
+      if (book.Chapters != null) {
+        for (var chapter in book.Chapters!) {
+          if (chapter.HtmlContent != null) {
+            String clean = chapter.HtmlContent!
+                .replaceAll(RegExp(r'<[^>]*>', multiLine: true), ' ')
+                .replaceAll(RegExp(r'\s+'), ' ')
+                .trim();
+            buffer.write("$clean ");
+          }
+        }
+      }
+      _fullCleanHtml = buffer.toString().isEmpty ? "Текст не найден" : buffer.toString();
+    } catch (e) {
+      debugPrint("Ошибка парсинга: $e");
+      _fullCleanHtml = "Ошибка чтения файла.";
+    }
+  }
+
+  void _repaginate() {
+    int charsPerPage = (1300 / (_fontSize / 18) / (1 + (_horizontalPadding - 25) / 100)).round();
+    List<String> tempPages = [];
+    for (int i = 0; i < _fullCleanHtml.length; i += charsPerPage) {
+      int end = (i + charsPerPage < _fullCleanHtml.length) ? i + charsPerPage : _fullCleanHtml.length;
+      tempPages.add(_fullCleanHtml.substring(i, end));
+    }
+    setState(() {
+      _pages = tempPages;
+      if (_currentPage >= _pages.length) _currentPage = _pages.isNotEmpty ? _pages.length - 1 : 0;
+    });
+  }
+
+  void _jumpToProgress(double progress) {
+    if (_pages.isEmpty) return;
+    _currentProgress = progress.clamp(0.0, 1.0);
+
+    if (_readingMode == ReadingMode.horizontal) {
+      int targetPage = (_currentProgress * (_pages.length - 1)).round();
+      if (_pageController.hasClients) _pageController.jumpToPage(targetPage);
+      setState(() => _currentPage = targetPage);
+    } else {
+      if (_scrollController.hasClients) {
+        double offset = _currentProgress * _scrollController.position.maxScrollExtent;
+        _scrollController.jumpTo(offset);
+      }
+    }
+  }
+
   Future<void> _loadNotesFromSupabase() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return;
     try {
-      final data = await _supabase
-          .from('user_notes')
-          .select()
-          .eq('book_id', widget.book.id);
-      setState(() {
-        _bookNotes = List<Map<String, dynamic>>.from(data);
-      });
+      final data = await _supabase.from('user_notes').select().eq('book_id', widget.book.id);
+      if (mounted) setState(() => _bookNotes = List<Map<String, dynamic>>.from(data));
     } catch (e) {
-      debugPrint("Ошибка загрузки заметок: $e");
+      debugPrint("Ошибка заметок: $e");
     }
   }
 
@@ -132,54 +190,6 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     }
   }
 
-  Future<void> _loadAndCleanEpub() async {
-    final file = File(widget.filePath);
-    final bytes = await file.readAsBytes();
-    final book = await EpubReader.readBook(bytes);
-
-    StringBuffer buffer = StringBuffer();
-    book.Chapters?.forEach((chapter) {
-      if (chapter.HtmlContent != null) {
-        String raw = chapter.HtmlContent!;
-        if (raw.contains('<body')) raw = raw.substring(raw.indexOf('<body'));
-        String clean = raw
-            .replaceAll(RegExp(r'</?(body|html|head|link|meta|style|span|div)[^>]*>'), '')
-            .replaceAll(RegExp(r'<a[^>]*>|</a>'), '')
-            .replaceAll(RegExp(r'\s(style|class|id|onclick|target)="[^"]*"'), '')
-            .trim();
-        buffer.write(clean);
-      }
-    });
-    _fullCleanHtml = buffer.toString();
-  }
-
-  void _repaginate() {
-    int charsPerPage = (1300 / (_fontSize / 18) / (1 + (_horizontalPadding - 25) / 100)).round();
-    List<String> tempPages = [];
-    for (int i = 0; i < _fullCleanHtml.length; i += charsPerPage) {
-      int end = (i + charsPerPage < _fullCleanHtml.length) ? i + charsPerPage : _fullCleanHtml.length;
-      tempPages.add(_fullCleanHtml.substring(i, end));
-    }
-    _pages = tempPages;
-  }
-
-  void _jumpToProgress(double progress) {
-    if (_pages.isEmpty) return;
-    _currentProgress = progress.clamp(0.0, 1.0);
-
-    if (_readingMode == ReadingMode.horizontal) {
-      int targetPage = (_currentProgress * (_pages.length - 1)).round();
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(targetPage);
-      }
-      setState(() => _currentPage = targetPage);
-    } else {
-      if (_scrollController.hasClients) {
-        double offset = _currentProgress * _scrollController.position.maxScrollExtent;
-        _scrollController.jumpTo(offset);
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -519,7 +529,6 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
 
   @override
   void dispose() {
-    _syncProgressToSupabase();
     _saveSettings();
     _scrollController.dispose();
     _pageController.dispose();

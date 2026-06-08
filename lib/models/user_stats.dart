@@ -1,3 +1,4 @@
+// lib/models/user_stats.dart
 class UserStats {
   final String userId;
   final int booksReadCount;

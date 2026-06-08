@@ -1,3 +1,4 @@
+// lib/models/book.dart
 class Book {
   final String id;
   final String title;
@@ -21,6 +22,7 @@ class Book {
     required this.createdAt,
   });
 
+  /// Полная версия (страница книги, есть description + file_url)
   factory Book.fromJson(Map<String, dynamic> json) => Book(
     id: json['id'] as String,
     title: json['title'] as String,
@@ -28,18 +30,24 @@ class Book {
     fileUrl: json['file_url'] as String?,
     coverUrl: json['cover_url'] as String?,
     description: json['description'] as String?,
-    categories: (json['categories'] as List<dynamic>?)?.cast<String>() ?? [],
+    categories:
+    (json['categories'] as List<dynamic>?)?.cast<String>() ?? [],
     rating: (json['rating'] as num?)?.toDouble() ?? 0.0,
     createdAt: DateTime.parse(json['created_at'] as String),
   );
+
+  /// Лёгкая версия для списков (без description, file_url)
   factory Book.fromListJson(Map<String, dynamic> json) => Book(
     id: json['id'] as String,
     title: json['title'] as String,
     author: json['author'] as String?,
     coverUrl: json['cover_url'] as String?,
-    categories: (json['categories'] as List<dynamic>?)?.cast<String>() ?? [],
+    categories:
+    (json['categories'] as List<dynamic>?)?.cast<String>() ?? [],
     rating: (json['rating'] as num?)?.toDouble() ?? 0.0,
-    createdAt: DateTime.parse(json['created_at'] as String),
+    createdAt: json['created_at'] != null
+        ? DateTime.parse(json['created_at'] as String)
+        : DateTime.now(),
   );
 
   Book copyWith({

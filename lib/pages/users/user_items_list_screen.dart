@@ -211,14 +211,18 @@ class _UserItemsListScreenState extends State<UserItemsListScreen> {
         if (bookData != null) {
           final book = Book(
             id: bookData['id'].toString(),
-            title: bookData['title'] ?? '',
-            author: bookData['author'] ?? '',
-            // ИСПРАВЛЕНО: используем правильные ключи cover_url и file_url
+            title: bookData['title'] ?? 'Без названия',
+            author: bookData['author'] ?? 'Автор неизвестен',
             coverUrl: bookData['cover_url'] ?? '',
             fileUrl: bookData['file_url'] ?? '',
             description: bookData['description'] ?? '',
-            pages: (bookData['pages'] as num?)?.toInt() ?? 0,
             categories: List<String>.from(bookData['categories'] ?? []),
+
+
+            rating: (bookData['rating'] as num?)?.toDouble() ?? 0.0,
+            createdAt: bookData['created_at'] != null
+                ? DateTime.parse(bookData['created_at'])
+                : DateTime.now(),
           );
           Navigator.push(context, MaterialPageRoute(builder: (_) => BookReaderScreen(book: book)));
         }

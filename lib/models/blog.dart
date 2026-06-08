@@ -1,4 +1,5 @@
-import 'package:auth_ui_demo/models/profile.dart';
+// lib/models/blog.dart
+import 'profile.dart';
 
 class Blog {
   final String id;
@@ -39,16 +40,22 @@ class Blog {
         : null,
   );
 
-  Blog copyWith({int? likes, int? comments, bool? isLikedByMe}) => Blog(
-    id: id,
-    userId: userId,
-    title: title,
-    content: content,
-    likes: likes ?? this.likes,
-    comments: comments ?? this.comments,
-    imageUrl: imageUrl,
-    createdAt: createdAt,
-    author: author,
-    isLikedByMe: isLikedByMe ?? this.isLikedByMe,
-  );
+  Blog copyWith({
+    int? likes,
+    int? comments,
+    bool? isLikedByMe,
+    String? imageUrl,
+  }) =>
+      Blog(
+        id: id,
+        userId: userId,
+        title: title,
+        content: content,
+        likes: likes ?? this.likes,
+        comments: comments ?? this.comments,
+        imageUrl: imageUrl ?? this.imageUrl,
+        createdAt: createdAt,
+        author: author,
+        isLikedByMe: isLikedByMe ?? this.isLikedByMe,
+      );
 }

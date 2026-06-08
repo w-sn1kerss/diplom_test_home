@@ -136,7 +136,7 @@ class OnboardingThird extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => LoginScreen(), // Название второй страницы
+                          builder: (context) => const LoginPage(), // Укажите верное имя класса из login_page.dart
                         ),
                       );
                     },

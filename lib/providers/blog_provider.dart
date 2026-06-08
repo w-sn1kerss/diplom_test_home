@@ -1,9 +1,10 @@
+// lib/providers/blog_provider.dart
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/models.dart';
 import '../repositories/blog_repository.dart';
-
+import '../utils/utils.dart';
 
 class BlogProvider extends ChangeNotifier {
   final BlogRepository _repo;
@@ -12,25 +13,27 @@ class BlogProvider extends ChangeNotifier {
   bool _loading = false;
   bool _hasMore = true;
   int _page = 0;
-  String? _error;
 
-  // Ð”Ð»Ñ Ð´ÐµÑ‚Ð°Ð»ÑŒÐ½Ð¾Ð¹ ÑÑ‚Ñ€Ð°Ð½Ð¸Ñ†Ñ‹
   Blog? _selectedBlog;
   List<Map<String, dynamic>> _blogComments = [];
 
   RealtimeChannel? _realtimeChannel;
+  String? _error;
 
-  // ---- Ð“ÐµÑ‚Ñ‚ÐµÑ€Ñ‹ ----
   List<Blog> get blogs => _blogs;
   bool get loading => _loading;
   bool get hasMore => _hasMore;
-  String? get error => _error;
   Blog? get selectedBlog => _selectedBlog;
   List<Map<String, dynamic>> get blogComments => _blogComments;
+  String? get error => _error;
 
   BlogProvider(this._repo);
 
-  // ---- Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ð»ÐµÐ½Ñ‚Ñ‹ ----
+  // Внутри BlogProvider
+  Future<List<Blog>> fetchBlogsByAuthor(String userId) async {
+    return await _repo.getBlogs(page: 0, authorId: userId);
+  }
+
   Future<void> loadBlogs({String? authorId}) async {
     _page = 0;
     _hasMore = true;
@@ -54,11 +57,13 @@ class BlogProvider extends ChangeNotifier {
 
   Future<void> loadMore({String? authorId}) async {
     if (!_hasMore || _loading) return;
+
     _loading = true;
     notifyListeners();
 
     try {
-      final result = await _repo.getBlogs(page: _page, authorId: authorId);
+      final result =
+      await _repo.getBlogs(page: _page, authorId: authorId);
       _blogs = [..._blogs, ...result];
       _hasMore = result.length == 15;
       _page++;
@@ -70,11 +75,9 @@ class BlogProvider extends ChangeNotifier {
     }
   }
 
-  // ---- Ð’Ñ‹Ð±Ð¾Ñ€ Ð±Ð»Ð¾Ð³Ð° ----
   Future<void> selectBlog(String id) async {
-    // ÐŸÐ¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÐ¼ Ð¸Ð· ÑÐ¿Ð¸ÑÐºÐ° Ð¼Ð³Ð½Ð¾Ð²ÐµÐ½Ð½Ð¾ Ð¿Ð¾ÐºÐ° Ð³Ñ€ÑƒÐ·Ð¸Ð¼ Ð¿Ð¾Ð»Ð½ÑƒÑŽ Ð²ÐµÑ€ÑÐ¸ÑŽ
-    _selectedBlog = _blogs.where((b) => b.id == id).firstOrNull;
-    _blogComments = [];
+    _loading = true;
+    _error = null;
     notifyListeners();
 
     try {
@@ -83,16 +86,17 @@ class BlogProvider extends ChangeNotifier {
         _repo.getBlogComments(id),
       ]);
       _selectedBlog = results[0] as Blog;
-      _blogComments =
-          (results[1] as List).cast<Map<String, dynamic>>();
+      _blogComments = (results[1] as List).cast<Map<String, dynamic>>();
       notifyListeners();
     } catch (e) {
       _error = handleError(e);
       notifyListeners();
+    } finally {
+      _loading = false;
+      notifyListeners();
     }
   }
 
-  // ---- Ð¡Ð¾Ð·Ð´Ð°Ñ‚ÑŒ Ð±Ð»Ð¾Ð³ ----
   Future<bool> createBlog({
     required String title,
     required String content,
@@ -115,7 +119,6 @@ class BlogProvider extends ChangeNotifier {
     }
   }
 
-  // ---- Ð£Ð´Ð°Ð»Ð¸Ñ‚ÑŒ Ð±Ð»Ð¾Ð³ ----
   Future<bool> deleteBlog(String id) async {
     try {
       await _repo.deleteBlog(id);
@@ -130,10 +133,10 @@ class BlogProvider extends ChangeNotifier {
     }
   }
 
-  // ---- Ð›Ð°Ð¹Ðº (Ð¾Ð¿Ñ‚Ð¸Ð¼Ð¸ÑÑ‚Ð¸Ñ‡Ð½Ð¾Ðµ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ) ----
   Future<void> toggleLike(Blog blog) async {
-    // ÐœÐ³Ð½Ð¾Ð²ÐµÐ½Ð½Ð¾ Ð¾Ð±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ UI
     final idx = _blogs.indexWhere((b) => b.id == blog.id);
+
+    // Оптимистичное обновление
     final optimistic = blog.isLikedByMe
         ? blog.copyWith(likes: blog.likes - 1, isLikedByMe: false)
         : blog.copyWith(likes: blog.likes + 1, isLikedByMe: true);
@@ -148,7 +151,7 @@ class BlogProvider extends ChangeNotifier {
       if (_selectedBlog?.id == blog.id) _selectedBlog = fromServer;
       notifyListeners();
     } catch (e) {
-      // ÐžÑ‚ÐºÐ°Ñ‚
+      // Откат
       if (idx != -1) _blogs[idx] = blog;
       if (_selectedBlog?.id == blog.id) _selectedBlog = blog;
       _error = handleError(e);
@@ -156,7 +159,6 @@ class BlogProvider extends ChangeNotifier {
     }
   }
 
-  // ---- ÐšÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸Ð¹ Ðº Ð±Ð»Ð¾Ð³Ñƒ ----
   Future<bool> addBlogComment({
     required String blogId,
     required String content,
@@ -168,17 +170,15 @@ class BlogProvider extends ChangeNotifier {
       );
       _blogComments = [comment, ..._blogComments];
 
-      // ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸Ðº
+      // Обновляем счётчик
       final idx = _blogs.indexWhere((b) => b.id == blogId);
       if (idx != -1) {
-        _blogs[idx] = _blogs[idx].copyWith(
-          comments: _blogs[idx].comments + 1,
-        );
+        _blogs[idx] =
+            _blogs[idx].copyWith(comments: _blogs[idx].comments + 1);
       }
       if (_selectedBlog?.id == blogId) {
-        _selectedBlog = _selectedBlog!.copyWith(
-          comments: _selectedBlog!.comments + 1,
-        );
+        _selectedBlog = _selectedBlog!
+            .copyWith(comments: _selectedBlog!.comments + 1);
       }
 
       notifyListeners();
@@ -190,12 +190,8 @@ class BlogProvider extends ChangeNotifier {
     }
   }
 
-  // ---- Realtime Ð¿Ð¾Ð´Ð¿Ð¸ÑÐºÐ° ----
   void startRealtimeFeed() {
-    _realtimeChannel = _repo.subscribeToBlogFeed((newBlogData) {
-      // ÐŸÐµÑ€ÐµÐ·Ð°Ð³Ñ€ÑƒÐ¶Ð°ÐµÐ¼ ÐºÐ¾Ð³Ð´Ð° Ð¿Ð¾ÑÐ²Ð¸Ð»ÑÑ Ð½Ð¾Ð²Ñ‹Ð¹ Ð±Ð»Ð¾Ð³
-      loadBlogs();
-    });
+    _realtimeChannel = _repo.subscribeToBlogFeed((_) => loadBlogs());
   }
 
   void stopRealtimeFeed() {

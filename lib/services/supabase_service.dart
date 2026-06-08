@@ -44,8 +44,14 @@
             coverUrl: 'https://via.placeholder.com/150x200?text=$extension',
             fileUrl: url,
             description: 'Загружено из хранилища',
-            pages: 0,
             categories: [extension.toUpperCase()],
+
+            // ИСПРАВЛЕНИЕ: передаем обязательные поля, которых не хватало:
+            rating: 0.0, // Рейтинг по умолчанию
+            createdAt: DateTime.now(), // Дата создания по умолчанию
+
+            // ВНИМАНИЕ: Если в модели Book нет поля 'pages', удалите эту строку.
+            // Если вы планируете добавить 'pages', убедитесь, что оно есть в модели.
           );
         }).toList();
       } catch (e) {

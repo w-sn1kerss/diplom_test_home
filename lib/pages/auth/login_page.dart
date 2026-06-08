@@ -31,9 +31,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _submit() async {
-    // Ð£Ð±Ð¸Ñ€Ð°ÐµÐ¼ ÐºÐ»Ð°Ð²Ð¸Ð°Ñ‚ÑƒÑ€Ñƒ
     FocusScope.of(context).unfocus();
-
     if (!_formKey.currentState!.validate()) return;
 
     final success = await context.read<AuthProvider>().signIn(
@@ -63,22 +61,21 @@ class _LoginPageState extends State<LoginPage> {
     if (email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Ð’Ð²ÐµÐ´Ð¸Ñ‚Ðµ email Ð´Ð»Ñ ÑÐ±Ñ€Ð¾ÑÐ° Ð¿Ð°Ñ€Ð¾Ð»Ñ'),
+          content: Text('Введите email для сброса пароля'),
           behavior: SnackBarBehavior.floating,
         ),
       );
       return;
     }
 
-    final success =
-    await context.read<AuthProvider>().resetPassword(email);
+    final success = await context.read<AuthProvider>().resetPassword(email);
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(success
-            ? 'ÐŸÐ¸ÑÑŒÐ¼Ð¾ Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¾ Ð½Ð° $email'
-            : context.read<AuthProvider>().error ?? 'ÐžÑˆÐ¸Ð±ÐºÐ°'),
+            ? 'Письмо отправлено на $email'
+            : context.read<AuthProvider>().error ?? 'Ошибка'),
         backgroundColor: success ? Colors.green : Colors.red.shade600,
         behavior: SnackBarBehavior.floating,
       ),
@@ -87,8 +84,8 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLoading =
-    context.select<AuthProvider, bool>((p) => p.status == AuthStatus.loading);
+    final isLoading = context.select<AuthProvider, bool>(
+            (p) => p.status == AuthStatus.loading);
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -102,7 +99,7 @@ class _LoginPageState extends State<LoginPage> {
               children: [
                 const SizedBox(height: 40),
 
-                // Ð›Ð¾Ð³Ð¾Ñ‚Ð¸Ð¿ / Ð·Ð°Ð³Ð¾Ð»Ð¾Ð²Ð¾Ðº
+                // Логотип
                 Center(
                   child: Column(
                     children: [
@@ -113,29 +110,20 @@ class _LoginPageState extends State<LoginPage> {
                           color: const Color(0xFF6C63FF),
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        child: const Icon(
-                          Icons.menu_book_rounded,
-                          color: Colors.white,
-                          size: 40,
-                        ),
+                        child: const Icon(Icons.menu_book_rounded,
+                            color: Colors.white, size: 40),
                       ),
                       const SizedBox(height: 16),
-                      const Text(
-                        'BookHub',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1A1A2E),
-                        ),
-                      ),
+                      const Text('BookHub',
+                          style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1A1A2E))),
                       const SizedBox(height: 8),
-                      Text(
-                        'Ð’Ð¾Ð¹Ð´Ð¸Ñ‚Ðµ Ð² Ð°ÐºÐºÐ°ÑƒÐ½Ñ‚',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
+                      Text('Войдите в аккаунт',
+                          style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.grey.shade600)),
                     ],
                   ),
                 ),
@@ -150,7 +138,8 @@ class _LoginPageState extends State<LoginPage> {
                   textInputAction: TextInputAction.next,
                   autocorrect: false,
                   validator: Validators.email,
-                  onFieldSubmitted: (_) => _passwordFocus.requestFocus(),
+                  onFieldSubmitted: (_) =>
+                      _passwordFocus.requestFocus(),
                   decoration: const InputDecoration(
                     labelText: 'Email',
                     prefixIcon: Icon(Icons.email_outlined),
@@ -159,7 +148,7 @@ class _LoginPageState extends State<LoginPage> {
 
                 const SizedBox(height: 16),
 
-                // ÐŸÐ°Ñ€Ð¾Ð»ÑŒ
+                // Пароль
                 TextFormField(
                   controller: _passwordCtrl,
                   focusNode: _passwordFocus,
@@ -168,95 +157,85 @@ class _LoginPageState extends State<LoginPage> {
                   validator: Validators.password,
                   onFieldSubmitted: (_) => _submit(),
                   decoration: InputDecoration(
-                    labelText: 'ÐŸÐ°Ñ€Ð¾Ð»ÑŒ',
+                    labelText: 'Пароль',
                     prefixIcon: const Icon(Icons.lock_outlined),
                     suffixIcon: IconButton(
                       icon: Icon(_obscurePassword
                           ? Icons.visibility_outlined
                           : Icons.visibility_off_outlined),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
+                      onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword),
                     ),
                   ),
                 ),
 
                 const SizedBox(height: 8),
 
-                // Ð—Ð°Ð±Ñ‹Ð» Ð¿Ð°Ñ€Ð¾Ð»ÑŒ
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
                     onPressed: isLoading ? null : _forgotPassword,
-                    child: const Text('Ð—Ð°Ð±Ñ‹Ð»Ð¸ Ð¿Ð°Ñ€Ð¾Ð»ÑŒ?'),
+                    child: const Text('Забыли пароль?'),
                   ),
                 ),
 
                 const SizedBox(height: 24),
 
-                // ÐšÐ½Ð¾Ð¿ÐºÐ° Ð²Ñ…Ð¾Ð´Ð°
+                // Войти
                 ElevatedButton(
                   onPressed: isLoading ? null : _submit,
                   child: isLoading
                       ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
-                  )
-                      : const Text(
-                    'Ð’Ð¾Ð¹Ñ‚Ð¸',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                      : const Text('Войти',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w600)),
                 ),
 
                 const SizedBox(height: 24),
 
-                // Ð Ð°Ð·Ð´ÐµÐ»Ð¸Ñ‚ÐµÐ»ÑŒ
                 Row(
                   children: [
-                    Expanded(child: Divider(color: Colors.grey.shade300)),
+                    Expanded(
+                        child: Divider(color: Colors.grey.shade300)),
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(
-                        'Ð¸Ð»Ð¸',
-                        style: TextStyle(color: Colors.grey.shade500),
-                      ),
+                      padding:
+                      const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('или',
+                          style:
+                          TextStyle(color: Colors.grey.shade500)),
                     ),
-                    Expanded(child: Divider(color: Colors.grey.shade300)),
+                    Expanded(
+                        child: Divider(color: Colors.grey.shade300)),
                   ],
                 ),
 
                 const SizedBox(height: 24),
 
-                // ÐšÐ½Ð¾Ð¿ÐºÐ° Ñ€ÐµÐ³Ð¸ÑÑ‚Ñ€Ð°Ñ†Ð¸Ð¸
+                // Создать аккаунт
                 OutlinedButton(
                   onPressed: isLoading
                       ? null
                       : () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const RegisterPage(),
-                    ),
+                        builder: (_) => const RegisterPage()),
                   ),
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 52),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                        borderRadius: BorderRadius.circular(12)),
                     side: const BorderSide(color: Color(0xFF6C63FF)),
                   ),
                   child: const Text(
-                    'Ð¡Ð¾Ð·Ð´Ð°Ñ‚ÑŒ Ð°ÐºÐºÐ°ÑƒÐ½Ñ‚',
+                    'Создать аккаунт',
                     style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF6C63FF),
-                    ),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF6C63FF)),
                   ),
                 ),
 

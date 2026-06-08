@@ -1,3 +1,4 @@
+// lib/models/profile.dart
 class Profile {
   final String id;
   final String username;
@@ -17,11 +18,13 @@ class Profile {
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
     id: json['id'] as String,
-    username: json['username'] as String,
+    username: json['username'] as String? ?? 'user',
     fullName: json['full_name'] as String?,
     avatarUrl: json['avatar_url'] as String?,
     bio: json['bio'] as String?,
-    createdAt: DateTime.parse(json['created_at'] as String),
+    createdAt: json['created_at'] != null
+        ? DateTime.parse(json['created_at'] as String)
+        : DateTime.now(),
   );
 
   Profile copyWith({

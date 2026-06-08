@@ -1,4 +1,5 @@
-import 'package:auth_ui_demo/models/profile.dart';
+// lib/models/book_comment.dart
+import 'profile.dart';
 
 class BookComment {
   final String id;
@@ -10,6 +11,7 @@ class BookComment {
   final DateTime createdAt;
   final Profile? author;
   final bool isLikedByMe;
+
 
   const BookComment({
     required this.id,
@@ -36,12 +38,17 @@ class BookComment {
         : null,
   );
 
-  BookComment copyWith({int? likesCount, bool? isLikedByMe}) => BookComment(
+  BookComment copyWith({
+    int? likesCount,
+    bool? isLikedByMe,
+    int? rating, // Добавьте этот параметр
+    String? content, // И этот, если захотите менять текст отзыва
+  }) => BookComment(
     id: id,
     bookId: bookId,
     userId: userId,
-    content: content,
-    rating: rating,
+    content: content ?? this.content,
+    rating: rating ?? this.rating, // Используйте его здесь
     likesCount: likesCount ?? this.likesCount,
     createdAt: createdAt,
     author: author,
